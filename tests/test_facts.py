@@ -60,9 +60,9 @@ def test_distance_uses_real_consumption():
 
 
 def test_distance_falls_back_without_fuel_data():
-    """Без литров берём запасные 60 ₽/л и 10 л/100км: 12000 ₽ → 2000 км."""
+    """Без литров берём запасные 78 ₽/л и 9,6 л/100км: 12000 ₽ → 1602 км."""
     expenses = [expense(3, 12_000, Category.FUEL)]
-    assert "2 000 км" in reporting._fact_distance(context(expenses))
+    assert "1 602 км" in reporting._fact_distance(context(expenses))
 
 
 def test_distance_stays_quiet_on_small_sums():
@@ -79,7 +79,7 @@ def test_route_hint_matches_only_when_it_lands_well():
 
 def test_shawarma_counts_portions():
     fact = reporting._fact_shawarma(context([expense(3, 19_600, Category.FUEL)]))
-    assert fact == "На эти деньги вышло бы 56 порций шаурмы"
+    assert fact == "На эти деньги вышло бы 61 порция шаурмы"
 
 
 def test_oil_changes_and_tires_have_thresholds():
@@ -87,8 +87,8 @@ def test_oil_changes_and_tires_have_thresholds():
     assert reporting._fact_oil_changes(cheap) is None  # меньше двух замен
     assert reporting._fact_tires(cheap) is None
 
-    rich = context([expense(3, 92_000, Category.SERVICE)])
-    assert reporting._fact_oil_changes(rich) == "Этого хватило бы на 23 замены масла"
+    rich = context([expense(3, 200_000, Category.SERVICE)])
+    assert reporting._fact_oil_changes(rich) == "Этого хватило бы на 22 замены масла"
     assert reporting._fact_tires(rich) == "Это 3 комплекта зимней резины"
 
 

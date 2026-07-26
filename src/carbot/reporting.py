@@ -208,15 +208,27 @@ def _black_swan(top: list[Expense], expenses: list[Expense]) -> int | None:
 
 
 # Ориентировочные цены для фактов в жанре «на эти деньги можно было бы».
-# Точность тут не нужна — это подкол, а не смета.
-SHAWARMA_PRICE = Decimal(350)
-OIL_CHANGE_PRICE = Decimal(4_000)
-WINTER_TIRES_PRICE = Decimal(30_000)
-TANK_LITERS = Decimal(50)
+# Точность тут не нужна — это подкол, а не смета, но и мимо порядка быть не
+# должно. Цифры на июль 2026 и посчитаны под конкретный парк чата:
+# пять RAV4, одна Audi Q3, один Porsche Macan — то есть средневзвешенно
+# «пять народных кроссоверов и два дорогих». Поменяется парк — правьте здесь.
 
-# Запасные значения, пока в чате никто не писал литры и пробег
-FALLBACK_FUEL_PRICE = Decimal(60)  # ₽ за литр
-FALLBACK_CONSUMPTION = Decimal(10)  # л на 100 км
+SHAWARMA_PRICE = Decimal(320)  # классическая, Москва
+
+# RAV4 ~7 500, Q3 ~10 000, Macan ~17 000 (семь литров одобренного Porsche масла)
+OIL_CHANGE_PRICE = Decimal(9_000)
+
+# Комплект из четырёх: RAV4 на R17 ~37 000, на R19 ~59 000,
+# Q3 ~50 000, Macan на 265/45 R20 ~98 000
+WINTER_TIRES_PRICE = Decimal(55_000)
+
+# Баки: RAV4 55 л, Q3 63 л, Macan 75 л
+TANK_LITERS = Decimal(60)
+
+# Запасные значения, пока в чате никто не писал литры и пробег.
+# Все три модели ездят на 95-м, Macan просит 98-й.
+FALLBACK_FUEL_PRICE = Decimal(78)  # ₽ за литр АИ-95, Росстат, июль 2026
+FALLBACK_CONSUMPTION = Decimal("9.6")  # л на 100 км: RAV4 ~9.5, Q3 ~8.5, Macan ~11.5
 
 # Ориентиры для «уехать N км»: расстояние, маршрут, маршрут туда-обратно
 _ROUTES: tuple[tuple[int, str, str], ...] = (
