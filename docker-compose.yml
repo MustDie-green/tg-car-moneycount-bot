@@ -1,0 +1,15 @@
+services:
+  carbot:
+    build: .
+    container_name: tg-car-moneycount-bot
+    restart: unless-stopped
+    env_file:
+      - .env
+    volumes:
+      # База SurrealDB встроенная и живёт в файле — его надо пережить перезапуск
+      - ./data:/app/data
+    logging:
+      driver: json-file
+      options:
+        max-size: "10m"
+        max-file: "3"

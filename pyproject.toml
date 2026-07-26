@@ -1,0 +1,35 @@
+[project]
+name = "carbot"
+version = "0.1.0"
+description = "Телеграм-бот для учёта трат на автомобили в чате друзей"
+requires-python = ">=3.11"
+dependencies = [
+    "aiogram>=3.30",
+    "surrealdb>=2.0",
+    "pymorphy3>=2.0.4",
+    "pymorphy3-dicts-ru",
+    "rapidfuzz>=3.9",
+    "resvg-py>=0.3.3",
+    "fonttools>=4.53",
+    "APScheduler>=3.10",
+    "pydantic-settings>=2.4",
+    "python-dotenv>=1.0",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8.0", "pytest-asyncio>=0.24"]
+
+[project.scripts]
+carbot = "carbot.__main__:main"
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.pytest.ini_options]
+pythonpath = ["src"]
+testpaths = ["tests"]
+asyncio_mode = "auto"

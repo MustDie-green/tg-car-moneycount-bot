@@ -1,0 +1,21 @@
+.venv/
+venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+
+# Токен бота — только локально и на сервере, в репозиторий не едет
+.env
+
+# Встроенная база SurrealDB, кэш аватарок и превью картинок
+data/
+preview/
+
+# Вариативный Inter, из которого нарезаются начертания в assets/fonts
+.fontcache/
+
+*.egg-info/
+build/
+dist/
+.DS_Store
+.claude/settings.local.json

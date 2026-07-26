@@ -1,0 +1,41 @@
+#!/bin/bash
+# Деплой в один клик: тянет свежий код с гитхаба, пересобирает образ и
+# перезапускает бота. Запуск: bash start
+set -e
+
+cd "$(dirname "$0")"
+
+# Без .env контейнер поднимется и тут же упадёт — проверяем заранее
+if [ ! -f .env ]; then
+    echo 'Нет файла .env. Скопируй пример и впиши токен от @BotFather:'
+    echo '  cp .env.example .env && nano .env'
+    exit 1
+fi
+
+if ! grep -qE '^CARBOT_BOT_TOKEN=.+' .env; then
+    echo 'В .env не заполнен CARBOT_BOT_TOKEN'
+    exit 1
+fi
+
+# Папка под базу: том монтируется с хоста, пусть существует до старта
+mkdir -p data
+
+echo '=== Останавливаем старый контейнер ==='
+docker compose down
+
+echo '=== Тянем свежий код ==='
+git pull || echo 'git pull не сработал, деплоим то, что лежит локально'
+
+echo '=== Собираем образ ==='
+docker compose build
+
+echo '=== Запускаем ==='
+docker compose up --detach
+
+echo
+docker compose ps
+echo
+echo 'Готово. Дальше: docker compose logs -f'
+echo '--- последние строки лога ---'
+sleep 3
+docker compose logs --tail 20
