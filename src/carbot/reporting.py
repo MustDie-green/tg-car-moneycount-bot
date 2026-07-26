@@ -9,7 +9,7 @@ from decimal import Decimal
 
 from . import timeutil
 from .db import Repo
-from .formatting import money, plural, with_plural
+from .formatting import decimal_str, money, plural, with_plural
 from .models import Category, Expense, MonthReport, PersonMonth
 from .titles import assign_titles
 
@@ -141,7 +141,17 @@ async def build_month_report(
         total=total,
         prev_total=prev_total,
         by_category=dict(by_category),
-        fun_fact=_fun_fact(expenses, people, total, by_category, year, month, chat_id),
+        fun_fact=_fun_fact(
+            expenses,
+            people,
+            total,
+            by_category,
+            year,
+            month,
+            chat_id,
+            timeutil.days_elapsed(year, month, tz_name),
+            tz_name,
+        ),
     )
 
 
@@ -197,6 +207,255 @@ def _black_swan(top: list[Expense], expenses: list[Expense]) -> int | None:
 # --- Прикольный факт под картинкой ------------------------------------------
 
 
+# Ориентировочные цены для фактов в жанре «на эти деньги можно было бы».
+# Точность тут не нужна — это подкол, а не смета.
+SHAWARMA_PRICE = Decimal(350)
+OIL_CHANGE_PRICE = Decimal(4_000)
+WINTER_TIRES_PRICE = Decimal(30_000)
+TANK_LITERS = Decimal(50)
+
+# Запасные значения, пока в чате никто не писал литры и пробег
+FALLBACK_FUEL_PRICE = Decimal(60)  # ₽ за литр
+FALLBACK_CONSUMPTION = Decimal(10)  # л на 100 км
+
+# Ориентиры для «уехать N км»: расстояние, маршрут, маршрут туда-обратно
+_ROUTES: tuple[tuple[int, str, str], ...] = (
+    (40_075, "объехать Землю по экватору", "дважды объехать Землю по экватору"),
+    (9_000, "доехать от Москвы до Владивостока", "смотать из Москвы во Владивосток и обратно"),
+    (5_200, "доехать от Москвы до Байкала", "смотать из Москвы на Байкал и обратно"),
+    (1_900, "доехать от Москвы до Мурманска", "смотать из Москвы в Мурманск и обратно"),
+    (1_620, "доехать от Москвы до Сочи", "смотать из Москвы в Сочи и обратно"),
+    (820, "доехать от Москвы до Казани", "смотать из Москвы в Казань и обратно"),
+    (710, "доехать от Москвы до Питера", "смотать из Москвы в Питер и обратно"),
+    (420, "доехать от Москвы до Нижнего", "смотать из Москвы в Нижний и обратно"),
+)
+
+
+@dataclass(slots=True)
+class _FactContext:
+    """Всё, что нужно фактам, посчитано один раз на всех."""
+
+    expenses: list[Expense]
+    people: list[PersonMonth]
+    total: Decimal
+    by_category: dict[Category, Decimal]
+    count: int
+    average: Decimal
+    days: int  # сколько дней месяца уже прошло
+    tz_name: str
+    fuel: FuelStats | None
+
+    def local_day(self, moment: datetime) -> int:
+        """День месяца по часам чата: в базе время лежит в UTC."""
+        return moment.astimezone(timeutil.tz(self.tz_name)).day
+
+
+def _spaced(value: int) -> str:
+    return f"{value:,}".replace(",", " ")
+
+
+def _times(value: Decimal) -> str:
+    """2 → «2 раза», 2.5 → «2,5 раза», 5 → «5 раз»."""
+    rounded = value.quantize(Decimal("0.1"))
+    if rounded == rounded.to_integral_value():
+        count = int(rounded)
+        return f"{count} {plural(count, 'раз', 'раза', 'раз')}"
+    return f"{decimal_str(rounded)} раза"
+
+
+def _fact_average(ctx: _FactContext) -> str | None:
+    return (
+        f"{with_plural(ctx.count, 'трата', 'траты', 'трат')} за месяц, "
+        f"средний чек {money(ctx.average)}"
+    )
+
+
+def _fact_leader_share(ctx: _FactContext) -> str | None:
+    if not ctx.people or ctx.total <= 0:
+        return None
+    leader = ctx.people[0]
+    share = leader.total / ctx.total * 100
+    if share < 40:
+        return None
+    return f"{leader.name} в одиночку сжёг {share:.0f}% бюджета чата"
+
+
+def _fact_fuel_share(ctx: _FactContext) -> str | None:
+    fuel_total = ctx.by_category.get(Category.FUEL, ZERO)
+    if fuel_total <= 0 or ctx.total <= 0:
+        return None
+    share = fuel_total / ctx.total * 100
+    return f"На бензин ушло {share:.0f}% всех денег — {money(fuel_total)}"
+
+
+def _fact_washes(ctx: _FactContext) -> str | None:
+    """Цену мойки берём из самого чата — у всех она своя."""
+    washes = [
+        e for e in ctx.expenses if e.category == Category.OTHER and e.amount <= 2000
+    ]
+    if not washes:
+        return None
+    price = sum((e.amount for e in washes), ZERO) / len(washes)
+    if price <= 0:
+        return None
+    times = int(ctx.total / price)
+    if times < 2:
+        return None
+    return (
+        f"На эти деньги можно было {times} "
+        f"{plural(times, 'раз', 'раза', 'раз')} помыть машину"
+    )
+
+
+def _fact_liters(ctx: _FactContext) -> str | None:
+    liters = sum((e.liters or ZERO for e in ctx.expenses if e.liters), ZERO)
+    if liters <= 0:
+        return None
+    tanks = int(liters / TANK_LITERS)
+    if tanks < 1:
+        return None
+    return (
+        f"Залито {liters:.0f} литров — это примерно "
+        f"{with_plural(tanks, 'бак', 'бака', 'баков')}"
+    )
+
+
+def _fact_worst_day(ctx: _FactContext) -> str | None:
+    by_day: dict[int, Decimal] = defaultdict(lambda: ZERO)
+    for expense in ctx.expenses:
+        by_day[ctx.local_day(expense.spent_at)] += expense.amount
+    if not by_day:
+        return None
+    worst_day, worst_sum = max(by_day.items(), key=lambda item: item[1])
+    if worst_sum < ctx.average * 3:
+        return None
+    return f"Самый дорогой день — {worst_day}-е, {money(worst_sum)} за сутки"
+
+
+def _fact_distance(ctx: _FactContext) -> str | None:
+    """Сколько бы проехали, спустив весь бюджет месяца на один бензин."""
+    price = FALLBACK_FUEL_PRICE
+    consumption = FALLBACK_CONSUMPTION
+    if ctx.fuel:
+        price = ctx.fuel.price_per_liter or price
+        consumption = ctx.fuel.liters_per_100 or consumption
+    if price <= 0 or consumption <= 0:
+        return None
+    km = int(ctx.total / price / consumption * 100)
+    if km < 100:
+        return None
+    text = f"Этих денег хватило бы на {_spaced(km)} км пути"
+    hint = _route_hint(km)
+    return f"{text} — это как {hint}" if hint else text
+
+
+def _route_hint(km: int) -> str | None:
+    """Ориентир подставляем, только если он ложится ровно — иначе молчим.
+
+    Берём не первый подходящий, а самый точный: 1650 км — это скорее Сочи
+    (промах 2%), чем Мурманск (промах 13%), хотя формально подходят оба.
+    Поездка в один конец всегда выигрывает у «туда и обратно»: те же 1650 км
+    почти идеально ложатся и на Казань с возвратом, но до Сочи звучит живее.
+    """
+    for low, high, target, index in ((0.85, 1.2, 1.0, 1), (1.85, 2.2, 2.0, 2)):
+        best_miss: float | None = None
+        best_phrase: str | None = None
+
+        for route in _ROUTES:
+            ratio = km / route[0]
+            if not low <= ratio <= high:
+                continue
+            miss = abs(ratio - target)
+            if best_miss is None or miss < best_miss:
+                best_miss, best_phrase = miss, route[index]
+
+        if best_phrase:
+            return best_phrase
+
+    return None
+
+
+def _fact_shawarma(ctx: _FactContext) -> str | None:
+    count = int(ctx.total / SHAWARMA_PRICE)
+    if count < 5:
+        return None
+    # «56 шаурмы» звучит криво в любом падеже, поэтому считаем порциями
+    return (
+        f"На эти деньги вышло бы "
+        f"{with_plural(count, 'порция', 'порции', 'порций')} шаурмы"
+    )
+
+
+def _fact_oil_changes(ctx: _FactContext) -> str | None:
+    count = int(ctx.total / OIL_CHANGE_PRICE)
+    if count < 2:
+        return None
+    return f"Этого хватило бы на {with_plural(count, 'замену', 'замены', 'замен')} масла"
+
+
+def _fact_tires(ctx: _FactContext) -> str | None:
+    count = int(ctx.total / WINTER_TIRES_PRICE)
+    if count < 1:
+        return None
+    return f"Это {with_plural(count, 'комплект', 'комплекта', 'комплектов')} зимней резины"
+
+
+def _fact_per_day(ctx: _FactContext) -> str | None:
+    if ctx.days <= 0 or ctx.total <= 0:
+        return None
+    return f"Машины обходятся чату в {money(ctx.total / ctx.days)} в день"
+
+
+def _fact_year_pace(ctx: _FactContext) -> str | None:
+    if ctx.days <= 0 or ctx.total <= 0:
+        return None
+    return f"Таким темпом за год набежит {money(ctx.total / ctx.days * 365)}"
+
+
+def _fact_quiet_days(ctx: _FactContext) -> str | None:
+    spent_days = {ctx.local_day(e.spent_at) for e in ctx.expenses}
+    quiet = ctx.days - len(spent_days)
+    if quiet < 3:
+        return None
+    return f"{with_plural(quiet, 'день', 'дня', 'дней')} в этом месяце — без единой траты"
+
+
+def _fact_category_ratio(ctx: _FactContext) -> str | None:
+    fuel = ctx.by_category.get(Category.FUEL, ZERO)
+    service = ctx.by_category.get(Category.SERVICE, ZERO)
+    if fuel <= 0 or service <= 0:
+        return None
+    if service >= fuel * 2:
+        return (
+            f"Ремонт дороже бензина в {_times(service / fuel)} — "
+            f"{money(service)} против {money(fuel)}"
+        )
+    if fuel >= service * 2:
+        return (
+            f"Бензин дороже ремонта в {_times(fuel / service)} — "
+            f"{money(fuel)} против {money(service)}"
+        )
+    return None
+
+
+_FACT_BUILDERS = (
+    _fact_average,
+    _fact_leader_share,
+    _fact_fuel_share,
+    _fact_washes,
+    _fact_liters,
+    _fact_worst_day,
+    _fact_distance,
+    _fact_shawarma,
+    _fact_oil_changes,
+    _fact_tires,
+    _fact_per_day,
+    _fact_year_pace,
+    _fact_quiet_days,
+    _fact_category_ratio,
+)
+
+
 def _fun_fact(
     expenses: list[Expense],
     people: list[PersonMonth],
@@ -205,58 +464,26 @@ def _fun_fact(
     year: int,
     month: int,
     chat_id: int,
+    days: int,
+    tz_name: str,
 ) -> str | None:
     if not expenses:
         return None
 
-    facts: list[str] = []
-    count = len(expenses)
-    average = total / count
-
-    facts.append(
-        f"{with_plural(count, 'трата', 'траты', 'трат')} за месяц, "
-        f"средний чек {money(average)}"
+    context = _FactContext(
+        expenses=expenses,
+        people=people,
+        total=total,
+        by_category=by_category,
+        count=len(expenses),
+        average=total / len(expenses),
+        days=days,
+        tz_name=tz_name,
+        fuel=fuel_stats(expenses),
     )
-
-    if people and total > 0:
-        leader = people[0]
-        share = leader.total / total * 100
-        if share >= 40:
-            facts.append(
-                f"{leader.name} в одиночку сжёг {share:.0f}% бюджета чата"
-            )
-
-    fuel_total = by_category.get(Category.FUEL, ZERO)
-    if fuel_total > 0 and total > 0:
-        share = fuel_total / total * 100
-        facts.append(f"На бензин ушло {share:.0f}% всех денег — {money(fuel_total)}")
-
-    washes = [e for e in expenses if e.category == Category.OTHER and e.amount <= 2000]
-    if washes and total > 0:
-        wash_price = sum((e.amount for e in washes), ZERO) / len(washes)
-        if wash_price > 0:
-            times = int(total / wash_price)
-            facts.append(
-                f"На эти деньги можно было {times} "
-                f"{plural(times, 'раз', 'раза', 'раз')} помыть машину"
-            )
-
-    liters = sum((e.liters or ZERO for e in expenses if e.liters), ZERO)
-    if liters > 0:
-        facts.append(
-            f"Залито {liters:.0f} литров — это примерно "
-            f"{int(liters / 50)} {plural(int(liters / 50), 'бак', 'бака', 'баков')}"
-        )
-
-    by_day: dict[int, Decimal] = defaultdict(lambda: ZERO)
-    for expense in expenses:
-        by_day[expense.spent_at.day] += expense.amount
-    if by_day:
-        worst_day, worst_sum = max(by_day.items(), key=lambda item: item[1])
-        if worst_sum >= average * 3:
-            facts.append(
-                f"Самый дорогой день — {worst_day}-е, {money(worst_sum)} за сутки"
-            )
+    facts = [text for builder in _FACT_BUILDERS if (text := builder(context))]
+    if not facts:
+        return None
 
     # Выбор детерминирован: одинаковый месяц даёт одинаковый факт
     return facts[hash((chat_id, year, month)) % len(facts)]
