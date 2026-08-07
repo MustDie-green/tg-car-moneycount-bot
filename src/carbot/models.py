@@ -99,6 +99,17 @@ class Expense:
 
 
 @dataclass(slots=True)
+class ServiceHint:
+    """Строка «кому скоро на сервис» для общей картинки."""
+
+    person: str
+    car: str
+    title: str
+    reason: str
+    overdue: bool = False
+
+
+@dataclass(slots=True)
 class PersonMonth:
     """Агрегат по человеку за месяц — основа для картинки."""
 
@@ -111,6 +122,12 @@ class PersonMonth:
     prev_rank: int | None = None
     title: str | None = None
     avatar: bytes | None = None
+    # Заполняется из гаража: машина, пробег и цена километра
+    car_title: str | None = None
+    odometer: str | None = None
+    month_km: int | None = None
+    rub_per_km: Decimal | None = None
+    cost_low_data: bool = False
 
     @property
     def rank_delta(self) -> int | None:
@@ -131,3 +148,6 @@ class MonthReport:
     prev_total: Decimal
     by_category: dict[Category, Decimal]
     fun_fact: str | None = None
+    # Сводка по парку: кому скоро на сервис
+    service_soon: list[ServiceHint] = field(default_factory=list)
+    total_km: int | None = None

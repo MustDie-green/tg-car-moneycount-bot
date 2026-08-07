@@ -87,15 +87,6 @@ def press(data: str, *, user_id: int = ANTON, question_id: int = 501) -> Callbac
     )
 
 
-@pytest.fixture(scope="module")
-def dispatcher():
-    # Роутеры хендлеров — синглтоны, поэтому диспетчер на весь модуль один,
-    # а состояние (база и бот) подменяется в каждом тесте.
-    instance = Dispatcher()
-    instance.include_router(build_router())
-    return instance
-
-
 @pytest.fixture
 async def harness(dispatcher):
     db = Database("mem://", "test", "test")

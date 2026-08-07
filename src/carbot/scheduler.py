@@ -9,7 +9,7 @@ from apscheduler.schedulers.asyncio import AsyncIOScheduler
 from apscheduler.triggers.cron import CronTrigger
 from apscheduler.triggers.interval import IntervalTrigger
 
-from . import timeutil
+from . import garage, service, timeutil
 from .handlers.commands import build_month_image, month_caption
 from .services import Context
 
@@ -41,7 +41,74 @@ def setup_scheduler(ctx: Context) -> AsyncIOScheduler:
         coalesce=True,
         max_instances=1,
     )
+
+    # Раз в сутки утром: проверяем, кому пора менять расходники
+    scheduler.add_job(
+        send_service_reminders,
+        CronTrigger(hour=11, minute=0, timezone=ctx.settings.timezone),
+        args=[ctx],
+        id="service-reminders",
+        misfire_grace_time=3600,
+        coalesce=True,
+        max_instances=1,
+    )
     return scheduler
+
+
+async def send_service_reminders(ctx: Context) -> None:
+    """Личное напоминание владельцу, когда до замены осталось немного.
+
+    Пишем только в личку и только тому, чья машина: в общем чате это было бы
+    ежедневным спамом. Личку бот открыть не может, поэтому тем, кто ни разу не
+    писал боту напрямую, сообщение просто не доставится — это нормально.
+    """
+    now = timeutil.now(ctx.settings.timezone)
+
+    for chat_id in await ctx.repo.chat_ids():
+        if not ctx.allows(chat_id):
+            continue
+        try:
+            garages = await garage.load_all(ctx.repo, chat_id, now=now)
+        except Exception:  # noqa: BLE001
+            log.exception("не смог собрать гараж чата %s", chat_id)
+            continue
+
+        for owner_id, item in garages.items():
+            ready = [
+                due
+                for due in item.due
+                if service.is_due(due, item.mileage, now)
+            ]
+            if not ready:
+                continue
+            await _notify(ctx, chat_id, owner_id, item, ready, now)
+
+
+async def _notify(ctx: Context, chat_id: int, owner_id: int, item, due_list, now) -> None:
+    lines = [f"🔧 <b>{item.title}</b> — скоро на сервис", ""]
+    for due in due_list:
+        mark = "❗️" if due.overdue else "·"
+        lines.append(f"{mark} {due.plan.title} — {due.reason()}")
+
+    if item.mileage and item.mileage.is_estimate:
+        lines += [
+            "",
+            f"<i>Пробег прикинут по темпу езды — точный был "
+            f"{item.mileage.known_km:,} км. Напиши «пробег 123456», "
+            f"и я пересчитаю.</i>".replace(",", " "),
+        ]
+
+    try:
+        await ctx.bot.send_message(owner_id, "\n".join(lines))
+    except Exception as error:  # noqa: BLE001
+        # Личка не открыта — ждём, пока человек сам напишет боту
+        log.debug("не смог написать %s в личку: %s", owner_id, error)
+        return
+
+    for due in due_list:
+        await ctx.repo.mark_reminded(
+            chat_id, owner_id, due.plan.car_slug, due.plan.kind, now
+        )
 
 
 async def send_monthly_reports(ctx: Context) -> None:

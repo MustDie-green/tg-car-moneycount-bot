@@ -6,8 +6,15 @@ import base64
 from decimal import Decimal
 
 from .. import timeutil
-from ..formatting import money, with_plural
-from ..models import Category, CATEGORY_TITLE, Expense, MonthReport, PersonMonth
+from ..formatting import decimal_str, money, with_plural
+from ..models import (
+    Category,
+    CATEGORY_TITLE,
+    Expense,
+    MonthReport,
+    PersonMonth,
+    ServiceHint,
+)
 from ..reporting import month_delta_text
 from . import icons, svg, theme
 from .text import FontBook
@@ -17,8 +24,11 @@ ZERO = Decimal(0)
 HEADER_H = 208
 PILL_H = 88
 PILL_GAP = 16
-ROW_H = 92
+# Строка участника выросла: под именем теперь машина, пробег и цена километра
+ROW_H = 108
 ROW_GAP = 12
+SERVICE_ROW_H = 58
+SERVICE_GAP = 10
 TOP_CARD_H = 88
 SECTION_H = 46
 FOOTER_H = 74
@@ -51,6 +61,10 @@ def render_month(
     if report.top_expenses:
         y = _section(body, fonts, y, "САМОЕ ДОРОГОЕ ЗА МЕСЯЦ")
         y = _top_expenses(body, report.top_expenses, fonts, y, tz_name, currency)
+
+    if report.service_soon:
+        y = _section(body, fonts, y, "СКОРО НА СЕРВИС")
+        y = _service_block(body, report.service_soon, fonts, y)
 
     if report.fun_fact:
         y = _footer(body, report.fun_fact, fonts, y)
@@ -97,6 +111,8 @@ def _header(body: list[str], report: MonthReport, fonts: FontBook, currency: str
         f"{with_plural(people_count, 'участник', 'участника', 'участников')} · "
         f"{with_plural(expense_count, 'трата', 'траты', 'трат')}"
     )
+    if report.total_km:
+        subtitle += f" · {report.total_km:,} км".replace(",", " ")
     body.append(svg.text(theme.PAD, 162, subtitle, size=17, weight=400, fill=theme.MUTED))
 
     body.append(
@@ -230,13 +246,39 @@ def _leaderboard_row(
         chip_markup, chip_w = chip
         name_limit -= chip_w + 12
     name = fonts.fit(person.name, 25, max(name_limit, 60), 700)
-    body.append(svg.text(NAME_X, top + 40, name, size=25, weight=700, fill=theme.TEXT))
+    body.append(svg.text(NAME_X, top + 36, name, size=25, weight=700, fill=theme.TEXT))
 
     if chip:
         chip_x = NAME_X + fonts.width(name, 25, 700) + 12
-        body.append(svg.group(chip_markup, transform=f"translate({svg.num(chip_x)},{svg.num(top + 20)})"))
+        body.append(svg.group(chip_markup, transform=f"translate({svg.num(chip_x)},{svg.num(top + 16)})"))
 
-    _category_bar(body, defs, person, index, NAME_X, top + 58, max_total)
+    meta = _person_meta(person)
+    if meta:
+        body.append(
+            svg.text(
+                NAME_X, top + 60,
+                fonts.fit(meta, 15, right - 26 - NAME_X - amount_w - 20, 400),
+                size=15, weight=400, fill=theme.MUTED,
+            )
+        )
+
+    _category_bar(body, defs, person, index, NAME_X, top + 76, max_total)
+
+
+def _person_meta(person: PersonMonth) -> str:
+    """«RAV4 · ~124 300 км · 1 240 км за месяц · 12,4 ₽/км»."""
+    parts: list[str] = []
+    if person.car_title:
+        parts.append(person.car_title)
+    if person.odometer:
+        parts.append(f"{person.odometer} км")
+    if person.month_km:
+        parts.append(f"{person.month_km:,} км за месяц".replace(",", " "))
+    if person.rub_per_km:
+        price = decimal_str(person.rub_per_km, 1)
+        # Пометка честности: цифра посчитана на слишком коротком окне
+        parts.append(f"≈{price} ₽/км" if person.cost_low_data else f"{price} ₽/км")
+    return " · ".join(parts)
 
 
 def _category_bar(
@@ -411,6 +453,48 @@ def _top_expenses(
         )
 
     return y + len(expenses) * (TOP_CARD_H + ROW_GAP)
+
+
+def _service_block(
+    body: list[str], hints: list[ServiceHint], fonts: FontBook, y: float
+) -> float:
+    """Кому по парку пора менять расходники: имя, машина, позиция и срок."""
+    width = theme.WIDTH - theme.PAD * 2
+    right = theme.WIDTH - theme.PAD
+
+    for index, hint in enumerate(hints):
+        top = y + index * (SERVICE_ROW_H + SERVICE_GAP)
+        color = theme.DOWN if hint.overdue else theme.GOLD
+
+        body.append(svg.rect(theme.PAD, top, width, SERVICE_ROW_H, rx=18, fill=theme.CARD))
+        body.append(svg.rect(theme.PAD, top, 4, SERVICE_ROW_H, rx=2, fill=color))
+
+        reason_w = fonts.width(hint.reason, 16, 700)
+        body.append(
+            svg.text(
+                right - 22, top + 36, hint.reason,
+                size=16, weight=700, fill=color, anchor="end",
+            )
+        )
+
+        label = f"{hint.person} · {hint.car}"
+        limit = right - 22 - reason_w - 24 - (theme.PAD + 26)
+        body.append(
+            svg.text(
+                theme.PAD + 26, top + 26,
+                fonts.fit(hint.title, 17, limit, 700),
+                size=17, weight=700, fill=theme.TEXT,
+            )
+        )
+        body.append(
+            svg.text(
+                theme.PAD + 26, top + 46,
+                fonts.fit(label, 14, limit, 400),
+                size=14, weight=400, fill=theme.MUTED,
+            )
+        )
+
+    return y + len(hints) * (SERVICE_ROW_H + SERVICE_GAP)
 
 
 def _footer(body: list[str], fact: str, fonts: FontBook, y: float) -> float:

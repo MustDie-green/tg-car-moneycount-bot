@@ -41,8 +41,13 @@ def render_personal(
     y = _history_chart(body, report, fonts, y, currency)
     y = _category_strip(body, report, y, currency)
     y = _stats(body, report, fonts, y, currency)
+    if report.cost is not None or report.month_km:
+        y = _mileage(body, report, y, currency)
     if report.fuel is not None:
         y = _fuel(body, report, y, currency)
+    if report.due:
+        y = _section(body, y, "СКОРО МЕНЯТЬ")
+        y = _service(body, report, fonts, y)
     if report.biggest is not None:
         y = _biggest(body, report, fonts, y, tz_name, currency)
 
@@ -65,9 +70,12 @@ def _header(body: list[str], report: PersonalReport, fonts: FontBook, currency: 
             size=44, weight=900, fill=theme.TEXT, tracking=-0.8,
         )
     )
+    subtitle = timeutil.month_title(report.year, report.month).title()
+    if report.car_title:
+        subtitle += f" · {report.car_title}"
     body.append(
         svg.text(
-            theme.PAD, 154, timeutil.month_title(report.year, report.month).title(),
+            theme.PAD, 154, fonts.fit(subtitle, 17, 560, 400),
             size=17, weight=400, fill=theme.MUTED,
         )
     )
@@ -175,6 +183,62 @@ def _stats(
     return _card_row(body, fonts, y, cards)
 
 
+def _mileage(
+    body: list[str], report: PersonalReport, y: float, currency: str
+) -> float:
+    """Пробег и цена километра по всем тратам — не только по бензину."""
+    cards: list[tuple[str, str, str]] = []
+
+    if report.odometer:
+        cards.append(("ПРОБЕГ", f"{report.odometer} км", theme.TEXT))
+    if report.month_km:
+        driven = f"{report.month_km:,} км".replace(",", " ")
+        cards.append(("НАКАТАЛ ЗА МЕСЯЦ", driven, theme.TEXT))
+
+    cost = report.cost
+    if cost is not None:
+        label = "ПОЛНАЯ ЦЕНА КМ" + ("  ·  МАЛО ДАННЫХ" if cost.low_data else "")
+        color = theme.MUTED if cost.low_data else theme.GOLD
+        cards.append((label, f"{decimal_str(cost.total, 2)} {currency}", color))
+
+    if not cards:
+        return y
+    return _card_row(body, None, y, cards)
+
+
+def _service(
+    body: list[str], report: PersonalReport, fonts: FontBook, y: float
+) -> float:
+    """Ближайшие позиции обслуживания с оставшимся запасом."""
+    width = theme.WIDTH - theme.PAD * 2
+    right = theme.WIDTH - theme.PAD
+    row_h, gap = 56, 10
+
+    for index, due in enumerate(report.due):
+        top = y + index * (row_h + gap)
+        color = theme.DOWN if due.overdue else theme.GOLD
+        body.append(svg.rect(theme.PAD, top, width, row_h, rx=18, fill=theme.CARD))
+        body.append(svg.rect(theme.PAD, top, 4, row_h, rx=2, fill=color))
+
+        reason = due.reason()
+        body.append(
+            svg.text(
+                right - 22, top + 34, reason,
+                size=16, weight=700, fill=color, anchor="end",
+            )
+        )
+        limit = width - 48 - fonts.width(reason, 16, 700) - 24
+        body.append(
+            svg.text(
+                theme.PAD + 26, top + 34,
+                fonts.fit(due.plan.title, 18, limit, 600),
+                size=18, weight=600, fill=theme.TEXT,
+            )
+        )
+
+    return y + len(report.due) * (row_h + gap) + 8
+
+
 def _fuel(body: list[str], report: PersonalReport, y: float, currency: str) -> float:
     fuel = report.fuel
     cards: list[tuple[str, str, str]] = []
@@ -187,7 +251,7 @@ def _fuel(body: list[str], report: PersonalReport, y: float, currency: str) -> f
             )
         )
     if fuel.rub_per_km is not None:
-        cards.append(("ЦЕНА КИЛОМЕТРА", f"{decimal_str(fuel.rub_per_km, 2)} {currency}", theme.TEXT))
+        cards.append(("КМ ПО БЕНЗИНУ", f"{decimal_str(fuel.rub_per_km, 2)} {currency}", theme.TEXT))
     if fuel.price_per_liter is not None:
         cards.append(("ЦЕНА ЛИТРА", f"{decimal_str(fuel.price_per_liter, 2)} {currency}", theme.TEXT))
     if not cards:

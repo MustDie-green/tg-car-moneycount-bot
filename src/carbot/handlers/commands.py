@@ -9,9 +9,14 @@ from datetime import datetime, timezone
 
 from aiogram import F, Router
 from aiogram.filters import Command, CommandObject, CommandStart
-from aiogram.types import BufferedInputFile, Message
+from aiogram.types import (
+    BufferedInputFile,
+    InlineKeyboardButton,
+    InlineKeyboardMarkup,
+    Message,
+)
 
-from .. import timeutil
+from .. import garage, timeutil
 from ..avatars import fetch_avatars
 from ..formatting import money, with_plural
 from ..models import CATEGORY_EMOJI, CATEGORY_TITLE, MonthReport
@@ -33,6 +38,9 @@ HELP = """<b>Автобухгалтерия</b> — считаю, кто ско�
 · <code>заправка 42л 2800 пробег 123456</code>
 Я отвечу «На тачку?» — жмите «Да», и трата уедет в базу, а на сообщении появится 🫡
 
+Можно писать и просто <code>пробег 123456</code> — запишу замер и отмечу ✍️.
+Чем чаще пишете пробег, тем точнее я считаю цену километра и сроки замен.
+
 <b>Категории</b>
 ⛽ Бензин · 🔧 Ремонт и ТО · 🧽 Остальное
 
@@ -42,7 +50,8 @@ HELP = """<b>Автобухгалтерия</b> — считаю, кто ско�
 /me — личная карточка со статистикой и расходом топлива
 /undo — удалить последнюю свою трату
 /car Camry — сказать, на какую машину идут траты
-/cars — список машин
+/cars — весь парк чата с пробегами
+/to — настроить, что и когда менять (открою личку)
 /lexicon — какие слова я выучил в этом чате
 /export — выгрузка всех трат в CSV
 
@@ -206,16 +215,55 @@ async def cmd_car(message: Message, command: CommandObject, ctx: Context) -> Non
 
 @router.message(Command("cars", "тачки"))
 async def cmd_cars(message: Message, ctx: Context) -> None:
-    if not ctx.allows(message.chat.id) or message.from_user is None:
+    """Весь парк чата: человек — машина — пробег."""
+    if not ctx.allows(message.chat.id):
         return
-    cars = await ctx.repo.cars(message.chat.id, message.from_user.id)
+    cars = await ctx.repo.all_cars(message.chat.id)
     if not cars:
         await message.reply("Машин пока нет. Добавь: <code>/car Camry 2007</code>")
         return
-    lines = [
-        f"{'🚗' if car['active'] else '🅿️'} {car['title']}" for car in cars
-    ]
-    await message.reply("\n".join(lines))
+
+    names = await ctx.repo.person_names(message.chat.id)
+    garages = await garage.load_all(
+        ctx.repo, message.chat.id, now=timeutil.now(ctx.settings.timezone)
+    )
+
+    lines: list[str] = []
+    for car in cars:
+        owner = names.get(car["owner_id"], "кто-то")
+        mark = "🚗" if car.get("active", True) else "🅿️"
+        parts = [f"{mark} <b>{owner}</b> — {car['title']}"]
+
+        found = garages.get(car["owner_id"])
+        # Пробег есть только у активной машины: замеры пишутся на неё
+        if found and found.slug == garage.slug_of(car["id"]) and found.odometer_text:
+            parts.append(f"{found.odometer_text} км")
+        lines.append(" — ".join(parts))
+
+    hint = "\n\n<i>~ перед пробегом — это моя оценка между замерами</i>"
+    await message.reply("\n".join(lines) + hint)
+
+
+@router.message(Command("to", "то", "service"))
+async def cmd_service(message: Message, ctx: Context) -> None:
+    """Приглашение в личку: настраивать интервалы в общем чате — это спам."""
+    if not ctx.allows(message.chat.id) or message.from_user is None:
+        return
+    await ctx.repo.bind_dm(message.from_user.id, message.chat.id)
+    me = await ctx.bot.me()
+    await message.reply(
+        "Настройка ТО живёт в личке, чтобы не засорять чат.",
+        reply_markup=InlineKeyboardMarkup(
+            inline_keyboard=[
+                [
+                    InlineKeyboardButton(
+                        text="🔧 Открыть личный кабинет",
+                        url=f"https://t.me/{me.username}?start=to",
+                    )
+                ]
+            ]
+        ),
+    )
 
 
 @router.message(Command("lexicon", "словарь"))

@@ -7,10 +7,12 @@ from dataclasses import dataclass, field
 from datetime import datetime
 from decimal import Decimal
 
-from . import timeutil
+from . import garage, timeutil
+from .cost import CostPerKm
 from .db import Repo
 from .formatting import decimal_str, money, plural, with_plural
-from .models import Category, Expense, MonthReport, PersonMonth
+from .models import Category, Expense, MonthReport, PersonMonth, ServiceHint
+from .service import ServiceDue
 from .titles import assign_titles
 
 ZERO = Decimal(0)
@@ -132,6 +134,33 @@ async def build_month_report(
     total = sum((e.amount for e in expenses), ZERO)
     prev_total = sum((row["total"] for row in prev_rows), ZERO)
 
+    garages = await garage.load_all(
+        repo, chat_id, start=start, end=end, now=timeutil.now(tz_name)
+    )
+    for person in people:
+        found = garages.get(person.tg_id)
+        if found is None:
+            continue
+        person.car_title = found.title
+        person.odometer = found.odometer_text
+        person.month_km = found.month_km
+        if found.cost:
+            person.rub_per_km = found.cost.total
+            person.cost_low_data = found.cost.low_data
+
+    names_by_id = {p.tg_id: p.name for p in people}
+    service_soon = [
+        ServiceHint(
+            person=names_by_id.get(item.owner_id, "—"),
+            car=item.title,
+            title=due.plan.title,
+            reason=due.reason(),
+            overdue=due.overdue,
+        )
+        for item, due in garage.soon(garages)
+    ]
+    driven = [g.month_km for g in garages.values() if g.month_km]
+
     return MonthReport(
         chat_id=chat_id,
         year=year,
@@ -152,6 +181,8 @@ async def build_month_report(
             timeutil.days_elapsed(year, month, tz_name),
             tz_name,
         ),
+        service_soon=service_soon,
+        total_km=sum(driven) if driven else None,
     )
 
 
@@ -522,6 +553,11 @@ class PersonalReport:
     fuel: FuelStats | None = None
     biggest: Expense | None = None
     all_time: Decimal = ZERO
+    car_title: str | None = None
+    odometer: str | None = None
+    month_km: int | None = None
+    cost: CostPerKm | None = None
+    due: list[ServiceDue] = field(default_factory=list)
 
 
 async def build_personal_report(
@@ -578,6 +614,10 @@ async def build_personal_report(
     fuel_series = await repo.fuel_series(chat_id, tg_id)
     biggest = max(mine, key=lambda e: e.amount, default=None)
 
+    mine_garage = await garage.load_one(
+        repo, chat_id, tg_id, start=start, end=end, now=timeutil.now(tz_name)
+    )
+
     return PersonalReport(
         tg_id=tg_id,
         name=name,
@@ -595,6 +635,11 @@ async def build_personal_report(
         fuel=fuel_stats(fuel_series),
         biggest=biggest,
         all_time=sum((e.amount for e in mine), ZERO),
+        car_title=mine_garage.title if mine_garage else None,
+        odometer=mine_garage.odometer_text if mine_garage else None,
+        month_km=mine_garage.month_km if mine_garage else None,
+        cost=mine_garage.cost if mine_garage else None,
+        due=mine_garage.due[:3] if mine_garage else [],
     )
 
 

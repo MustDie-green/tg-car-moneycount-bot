@@ -14,7 +14,45 @@ DEFINE FIELD IF NOT EXISTS chat_id ON car TYPE int;
 DEFINE FIELD IF NOT EXISTS owner_id ON car TYPE int;
 DEFINE FIELD IF NOT EXISTS title ON car TYPE string;
 DEFINE FIELD IF NOT EXISTS active ON car TYPE bool DEFAULT true;
+-- Со слов владельца: нужен, пока замеров одометра мало для своей оценки
+DEFINE FIELD IF NOT EXISTS monthly_km ON car TYPE option<int>;
 DEFINE FIELD IF NOT EXISTS created_at ON car TYPE datetime DEFAULT time::now();
+
+-- Замер одометра сам по себе: «пробег 123456» без траты
+DEFINE TABLE IF NOT EXISTS odometer SCHEMAFULL;
+DEFINE FIELD IF NOT EXISTS chat_id ON odometer TYPE int;
+DEFINE FIELD IF NOT EXISTS owner_id ON odometer TYPE int;
+DEFINE FIELD IF NOT EXISTS car ON odometer TYPE option<record<car>>;
+DEFINE FIELD IF NOT EXISTS km ON odometer TYPE int;
+DEFINE FIELD IF NOT EXISTS at ON odometer TYPE datetime;
+DEFINE INDEX IF NOT EXISTS odometer_owner ON odometer FIELDS chat_id, owner_id, at;
+
+-- Позиция обслуживания. id составной: service:[chat_id, owner_id, slug, kind]
+-- Следующая замена либо задана явно, либо считается как последняя + интервал.
+-- Срабатывает то, что ближе: километры или дни.
+DEFINE TABLE IF NOT EXISTS service SCHEMAFULL;
+DEFINE FIELD IF NOT EXISTS chat_id ON service TYPE int;
+DEFINE FIELD IF NOT EXISTS owner_id ON service TYPE int;
+DEFINE FIELD IF NOT EXISTS car ON service TYPE record<car>;
+DEFINE FIELD IF NOT EXISTS car_slug ON service TYPE string DEFAULT '';
+DEFINE FIELD IF NOT EXISTS car_title ON service TYPE string DEFAULT '';
+DEFINE FIELD IF NOT EXISTS kind ON service TYPE string;
+DEFINE FIELD IF NOT EXISTS interval_km ON service TYPE option<int>;
+DEFINE FIELD IF NOT EXISTS interval_days ON service TYPE option<int>;
+DEFINE FIELD IF NOT EXISTS last_km ON service TYPE option<int>;
+DEFINE FIELD IF NOT EXISTS last_at ON service TYPE option<datetime>;
+DEFINE FIELD IF NOT EXISTS next_km ON service TYPE option<int>;
+DEFINE FIELD IF NOT EXISTS next_at ON service TYPE option<datetime>;
+-- Когда последний раз напомнили: чтобы не долбить каждый день
+DEFINE FIELD IF NOT EXISTS reminded_at ON service TYPE option<datetime>;
+DEFINE FIELD IF NOT EXISTS updated_at ON service TYPE datetime DEFAULT time::now();
+DEFINE INDEX IF NOT EXISTS service_owner ON service FIELDS chat_id, owner_id;
+
+-- Личка: какой чат обслуживаем, когда человек пишет боту напрямую
+DEFINE TABLE IF NOT EXISTS dm SCHEMAFULL;
+DEFINE FIELD IF NOT EXISTS tg_id ON dm TYPE int;
+DEFINE FIELD IF NOT EXISTS chat_id ON dm TYPE int;
+DEFINE FIELD IF NOT EXISTS updated_at ON dm TYPE datetime DEFAULT time::now();
 
 -- Трата
 DEFINE TABLE IF NOT EXISTS expense SCHEMAFULL;

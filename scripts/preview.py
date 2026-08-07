@@ -14,7 +14,11 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 
 from carbot.config import settings  # noqa: E402
-from carbot.models import Category, Expense, MonthReport, PersonMonth  # noqa: E402
+from carbot.cost import CostPerKm  # noqa: E402
+from carbot.models import (  # noqa: E402
+    Category, Expense, MonthReport, PersonMonth, ServiceHint,
+)
+from carbot.service import ServiceDue, ServicePlan  # noqa: E402
 from carbot.render import dump_svg, load_fonts, render_month, render_personal, to_png  # noqa: E402
 from carbot.reporting import FuelStats, PersonalReport  # noqa: E402
 from carbot.titles import assign_titles  # noqa: E402
@@ -23,7 +27,7 @@ TZ = "Europe/Moscow"
 NOW = datetime(2026, 7, 20, 12, 0, tzinfo=timezone.utc)
 
 
-def person(tg_id, name, fuel, service, other, count, prev_rank):
+def person(tg_id, name, fuel, service, other, count, prev_rank, car=None):
     by_category = {}
     if fuel:
         by_category[Category.FUEL] = Decimal(fuel)
@@ -31,6 +35,9 @@ def person(tg_id, name, fuel, service, other, count, prev_rank):
         by_category[Category.SERVICE] = Decimal(service)
     if other:
         by_category[Category.OTHER] = Decimal(other)
+    car_title, odometer, month_km, per_km, low_data = car or (
+        None, None, None, None, False
+    )
     return PersonMonth(
         tg_id=tg_id,
         name=name,
@@ -38,6 +45,11 @@ def person(tg_id, name, fuel, service, other, count, prev_rank):
         by_category=by_category,
         count=count,
         prev_rank=prev_rank,
+        car_title=car_title,
+        odometer=odometer,
+        month_km=month_km,
+        rub_per_km=Decimal(per_km) if per_km else None,
+        cost_low_data=low_data,
     )
 
 
@@ -56,11 +68,16 @@ def expense(author_id, name, amount, category, note, day):
 
 def month_report() -> MonthReport:
     people = [
-        person(1, "Антон", 12400, 48000, 3200, 11, 3),
-        person(2, "Валера", 18600, 4500, 6800, 14, 1),
-        person(3, "Сергей Кузнецов", 9800, 12000, 1500, 7, 2),
-        person(4, "Дима", 14200, 0, 2400, 6, None),
-        person(5, "Костя", 6100, 1800, 900, 4, 4),
+        person(1, "Антон", 12400, 48000, 3200, 11, 3,
+               car=("Porsche Macan", "~84 300", 1420, "31.2", False)),
+        person(2, "Валера", 18600, 4500, 6800, 14, 1,
+               car=("Toyota RAV4", "212 480", 2180, "12.4", False)),
+        person(3, "Сергей Кузнецов", 9800, 12000, 1500, 7, 2,
+               car=("Audi Q3", "~96 100", 980, "18.7", False)),
+        person(4, "Дима", 14200, 0, 2400, 6, None,
+               car=("Toyota RAV4", "58 900", None, "9.1", True)),
+        person(5, "Костя", 6100, 1800, 900, 4, 4,
+               car=("Toyota RAV4", None, None, None, False)),
     ]
     people.sort(key=lambda p: -p.total)
     for position, item in enumerate(people, start=1):
@@ -93,6 +110,14 @@ def month_report() -> MonthReport:
             "Этих денег хватило бы на 4 014 км пути — "
             "это как смотать из Москвы в Мурманск и обратно"
         ),
+        service_soon=[
+            ServiceHint("Антон", "Porsche Macan", "Масло двигателя",
+                        "просрочено на 1 200 км", overdue=True),
+            ServiceHint("Валера", "Toyota RAV4", "Тормозная жидкость", "через 12 дн."),
+            ServiceHint("Сергей Кузнецов", "Audi Q3", "Салонный фильтр", "через ~380 км"),
+            ServiceHint("Дима", "Toyota RAV4", "Страховка", "через 9 дн."),
+        ],
+        total_km=6_890,
     )
 
 
@@ -131,6 +156,45 @@ def personal_report() -> PersonalReport:
         ),
         biggest=expense(1, "Антон", 48000, Category.SERVICE, "замена сцепления и выжимного", 14),
         all_time=Decimal(162700),
+        car_title="Porsche Macan",
+        odometer="~84 300",
+        month_km=1420,
+        cost=CostPerKm(
+            total=Decimal("31.24"),
+            fuel=Decimal("5.12"),
+            without_outlier=Decimal("9.80"),
+            distance=8400,
+            days=124,
+            readings=11,
+            expense_count=23,
+            low_data=False,
+        ),
+        due=[
+            ServiceDue(
+                plan=ServicePlan(
+                    chat_id=-100, owner_id=1, car_slug="macan",
+                    car_title="Porsche Macan", kind="oil_engine",
+                    interval_km=10_000, last_km=75_500,
+                ),
+                km_left=-1_200, days_left=None, estimated=True,
+            ),
+            ServiceDue(
+                plan=ServicePlan(
+                    chat_id=-100, owner_id=1, car_slug="macan",
+                    car_title="Porsche Macan", kind="brake_fluid",
+                    interval_days=730,
+                ),
+                km_left=None, days_left=41, estimated=False,
+            ),
+            ServiceDue(
+                plan=ServicePlan(
+                    chat_id=-100, owner_id=1, car_slug="macan",
+                    car_title="Porsche Macan", kind="filter_cabin",
+                    interval_km=15_000, last_km=72_000,
+                ),
+                km_left=2_700, days_left=None, estimated=True,
+            ),
+        ],
     )
 
 

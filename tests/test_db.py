@@ -198,3 +198,92 @@ async def test_fuel_series_ordered_by_odometer(repo):
     series = await repo.fuel_series(CHAT, ANTON)
     assert [e.odometer for e in series] == [120000, 120500, 121000]
     assert series[0].liters == Decimal(40)
+
+
+# --- Пробег, машины и обслуживание -------------------------------------------
+
+
+async def test_odometer_readings_merge_standalone_and_expenses(repo):
+    now = datetime.now(timezone.utc)
+    await repo.add_car(CHAT, ANTON, "RAV4")
+    car = await repo.active_car(CHAT, ANTON)
+
+    await repo.add_odometer(
+        chat_id=CHAT, owner_id=ANTON, km=100_000, at=now - timedelta(days=30), car=car
+    )
+    await repo.save_expenses(
+        chat_id=CHAT,
+        author_id=ANTON,
+        author_name="Антон",
+        message_id=70,
+        detections=[detection(3000, Category.FUEL, "бенз", odometer=101_000)],
+        spent_at=now,
+        car=car,
+    )
+
+    readings = await repo.odometer_readings(CHAT, ANTON)
+    assert [km for _, km in readings] == [100_000, 101_000]
+
+
+async def test_all_cars_covers_every_participant(repo):
+    await repo.add_car(CHAT, ANTON, "Porsche Macan")
+    await repo.add_car(CHAT, VALERA, "RAV4")
+    cars = await repo.all_cars(CHAT)
+    assert {car["title"] for car in cars} == {"Porsche Macan", "RAV4"}
+    assert {car["owner_id"] for car in cars} == {ANTON, VALERA}
+
+
+async def test_service_plan_roundtrip(repo):
+    now = datetime.now(timezone.utc)
+    await repo.add_car(CHAT, ANTON, "RAV4")
+    car = await repo.active_car(CHAT, ANTON)
+
+    await repo.upsert_service(
+        chat_id=CHAT,
+        owner_id=ANTON,
+        car=car,
+        car_slug="rav4",
+        car_title="RAV4",
+        kind="oil_engine",
+        interval_km=10_000,
+        last_km=100_000,
+    )
+    plans = await repo.service_plans(CHAT, ANTON)
+    assert len(plans) == 1
+    assert plans[0]["kind"] == "oil_engine"
+    assert plans[0]["last_km"] == 100_000
+    assert plans[0]["reminded_at"] is None
+
+    # Повторный апсерт обновляет, а не плодит дубли
+    await repo.upsert_service(
+        chat_id=CHAT,
+        owner_id=ANTON,
+        car=car,
+        car_slug="rav4",
+        car_title="RAV4",
+        kind="oil_engine",
+        interval_km=15_000,
+        last_km=100_000,
+    )
+    plans = await repo.service_plans(CHAT, ANTON)
+    assert len(plans) == 1 and plans[0]["interval_km"] == 15_000
+
+    await repo.mark_reminded(CHAT, ANTON, "rav4", "oil_engine", now)
+    plans = await repo.service_plans(CHAT, ANTON)
+    assert plans[0]["reminded_at"] is not None
+
+    await repo.drop_service(CHAT, ANTON, "rav4", "oil_engine")
+    assert await repo.service_plans(CHAT, ANTON) == []
+
+
+async def test_dm_binding(repo):
+    assert await repo.dm_chat(ANTON) is None
+    await repo.bind_dm(ANTON, CHAT)
+    assert await repo.dm_chat(ANTON) == CHAT
+
+
+async def test_chats_of_person(repo):
+    other_chat = -1009999999999
+    await repo.upsert_person(CHAT, ANTON, "Антон")
+    await repo.upsert_person(other_chat, ANTON, "Антон")
+    assert sorted(await repo.chats_of_person(ANTON)) == sorted([CHAT, other_chat])

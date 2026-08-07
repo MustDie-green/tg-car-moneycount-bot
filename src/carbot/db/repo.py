@@ -176,6 +176,15 @@ class Repo:
         )
         return [_row_to_expense(row) for row in rows or []]
 
+    async def expenses_of_person(self, chat_id: int, author_id: int) -> list[Expense]:
+        """Вся история трат человека — цена километра считает по своему окну."""
+        rows = await self.db.query(
+            "SELECT * FROM expense WHERE chat_id = $chat AND author_id = $author "
+            "ORDER BY spent_at ASC",
+            {"chat": chat_id, "author": author_id},
+        )
+        return [_row_to_expense(row) for row in rows or []]
+
     async def last_expense_at(self, chat_id: int, author_id: int) -> datetime | None:
         rows = await self.db.query(
             "SELECT spent_at FROM expense WHERE chat_id = $chat AND author_id = $author "
@@ -327,11 +336,164 @@ class Repo:
     async def cars(self, chat_id: int, owner_id: int) -> list[dict[str, Any]]:
         rows = await self.db.query(
             # SurrealDB требует, чтобы поле сортировки было в проекции
-            "SELECT title, active, created_at FROM car "
+            "SELECT id, title, active, monthly_km, created_at FROM car "
             "WHERE chat_id = $chat AND owner_id = $owner ORDER BY created_at ASC",
             {"chat": chat_id, "owner": owner_id},
         )
         return list(rows or [])
+
+    async def all_cars(self, chat_id: int) -> list[dict[str, Any]]:
+        """Весь парк чата — для /cars и общей карточки."""
+        rows = await self.db.query(
+            "SELECT id, owner_id, title, active, monthly_km, created_at FROM car "
+            "WHERE chat_id = $chat ORDER BY owner_id ASC, created_at ASC",
+            {"chat": chat_id},
+        )
+        return list(rows or [])
+
+    async def set_monthly_km(self, car: RecordID, monthly_km: int) -> None:
+        await self.db.query(
+            "UPDATE $car SET monthly_km = $km", {"car": car, "km": monthly_km}
+        )
+
+    # --- Пробег --------------------------------------------------------------
+
+    async def add_odometer(
+        self,
+        *,
+        chat_id: int,
+        owner_id: int,
+        km: int,
+        at: datetime,
+        car: RecordID | None = None,
+    ) -> None:
+        await self.db.query(
+            "CREATE odometer SET chat_id = $chat, owner_id = $owner, "
+            "car = $car, km = $km, at = $at",
+            {"chat": chat_id, "owner": owner_id, "car": car, "km": km, "at": at},
+        )
+
+    async def odometer_readings(
+        self, chat_id: int, owner_id: int
+    ) -> list[tuple[datetime, int]]:
+        """Все замеры пробега человека: и отдельные, и вписанные в траты."""
+        standalone = await self.db.query(
+            "SELECT km, at FROM odometer WHERE chat_id = $chat AND owner_id = $owner",
+            {"chat": chat_id, "owner": owner_id},
+        )
+        from_expenses = await self.db.query(
+            "SELECT odometer, spent_at FROM expense "
+            "WHERE chat_id = $chat AND author_id = $owner AND odometer != NONE",
+            {"chat": chat_id, "owner": owner_id},
+        )
+        readings = [(row["at"], row["km"]) for row in standalone or []]
+        readings += [
+            (row["spent_at"], row["odometer"]) for row in from_expenses or []
+        ]
+        return sorted(readings, key=lambda item: item[0])
+
+    # --- Обслуживание --------------------------------------------------------
+
+    async def service_plans(
+        self, chat_id: int, owner_id: int, car_slug: str | None = None
+    ) -> list[dict[str, Any]]:
+        clause = " AND car_slug = $slug" if car_slug else ""
+        rows = await self.db.query(
+            "SELECT chat_id, owner_id, car_slug, car_title, kind, interval_km, "
+            "interval_days, last_km, last_at, next_km, next_at, reminded_at "
+            f"FROM service WHERE chat_id = $chat AND owner_id = $owner{clause}",
+            {"chat": chat_id, "owner": owner_id, "slug": car_slug},
+        )
+        return list(rows or [])
+
+    async def all_service_plans(self, chat_id: int) -> list[dict[str, Any]]:
+        rows = await self.db.query(
+            "SELECT chat_id, owner_id, car_slug, car_title, kind, interval_km, "
+            "interval_days, last_km, last_at, next_km, next_at, reminded_at "
+            "FROM service WHERE chat_id = $chat",
+            {"chat": chat_id},
+        )
+        return list(rows or [])
+
+    async def upsert_service(
+        self,
+        *,
+        chat_id: int,
+        owner_id: int,
+        car: RecordID,
+        car_slug: str,
+        car_title: str,
+        kind: str,
+        interval_km: int | None = None,
+        interval_days: int | None = None,
+        last_km: int | None = None,
+        last_at: datetime | None = None,
+        next_km: int | None = None,
+        next_at: datetime | None = None,
+    ) -> None:
+        await self.db.query(
+            "UPSERT service:[$chat, $owner, $slug, $kind] SET chat_id = $chat, "
+            "owner_id = $owner, car = $car, car_slug = $slug, car_title = $title, "
+            "kind = $kind, interval_km = $ikm, interval_days = $idays, "
+            "last_km = $lkm, last_at = $lat, next_km = $nkm, next_at = $nat, "
+            "updated_at = time::now()",
+            {
+                "chat": chat_id,
+                "owner": owner_id,
+                "car": car,
+                "slug": car_slug,
+                "title": car_title,
+                "kind": kind,
+                "ikm": interval_km,
+                "idays": interval_days,
+                "lkm": last_km,
+                "lat": last_at,
+                "nkm": next_km,
+                "nat": next_at,
+            },
+        )
+
+    async def drop_service(
+        self, chat_id: int, owner_id: int, car_slug: str, kind: str
+    ) -> None:
+        await self.db.query(
+            "DELETE service:[$chat, $owner, $slug, $kind]",
+            {"chat": chat_id, "owner": owner_id, "slug": car_slug, "kind": kind},
+        )
+
+    async def mark_reminded(
+        self, chat_id: int, owner_id: int, car_slug: str, kind: str, at: datetime
+    ) -> None:
+        await self.db.query(
+            "UPDATE service:[$chat, $owner, $slug, $kind] SET reminded_at = $at",
+            {
+                "chat": chat_id,
+                "owner": owner_id,
+                "slug": car_slug,
+                "kind": kind,
+                "at": at,
+            },
+        )
+
+    # --- Личка ---------------------------------------------------------------
+
+    async def bind_dm(self, tg_id: int, chat_id: int) -> None:
+        """Какой чат обслуживаем, когда человек пишет боту напрямую."""
+        await self.db.query(
+            "UPSERT dm:[$tg] SET tg_id = $tg, chat_id = $chat, "
+            "updated_at = time::now()",
+            {"tg": tg_id, "chat": chat_id},
+        )
+
+    async def dm_chat(self, tg_id: int) -> int | None:
+        rows = await self.db.query("SELECT chat_id FROM dm:[$tg]", {"tg": tg_id})
+        return rows[0]["chat_id"] if rows else None
+
+    async def chats_of_person(self, tg_id: int) -> list[int]:
+        rows = await self.db.query(
+            "SELECT chat_id FROM person WHERE tg_id = $tg", {"tg": tg_id}
+        )
+        return [row["chat_id"] for row in rows or []]
 
 
 def _detection_to_json(detection: Detection) -> dict[str, Any]:

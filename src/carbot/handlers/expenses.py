@@ -23,6 +23,7 @@ from ..db import detection_from_json
 from ..formatting import money
 from ..models import CATEGORY_EMOJI, CATEGORY_TITLE, Category, Detection, ParseResult
 from ..parsing import parse_message
+from ..parsing.amount import extract_odometer
 from ..services import Context
 
 log = logging.getLogger(__name__)
@@ -38,6 +39,8 @@ CATEGORY_ACTIONS = {
 }
 
 SALUTE = "🫡"
+# Реакция на голый замер пробега — отличается от подтверждённой траты
+WRITTEN = "✍️"
 FIRE = "🔥"
 SKULL = "💀"
 
@@ -45,7 +48,12 @@ SKULL = "💀"
 # --- Сообщения ---------------------------------------------------------------
 
 
-@router.message(F.text | F.caption)
+# Детект трат — история про общий чат. В личке свой интерфейс, и ловить там
+# суммы значило бы перебивать мастер настройки ТО на полуслове.
+GROUP_TYPES = {"group", "supergroup"}
+
+
+@router.message(F.chat.type.in_(GROUP_TYPES), F.text | F.caption)
 async def on_message(message: Message, ctx: Context) -> None:
     if message.from_user is None or message.from_user.is_bot:
         return
@@ -61,6 +69,9 @@ async def on_message(message: Message, ctx: Context) -> None:
         max_amount=ctx.settings.max_amount,
     )
     if not result:
+        # Суммы нет, но мог быть голый замер: «пробег 123456».
+        # Это главный корм для оценки пробега, терять его жалко.
+        await _maybe_odometer(message, ctx, text)
         return
 
     if await ctx.repo.has_pending(message.chat.id, message.message_id):
@@ -84,6 +95,34 @@ async def on_message(message: Message, ctx: Context) -> None:
         spent_at=message.date,
         ttl_seconds=ctx.settings.pending_ttl,
     )
+
+
+async def _maybe_odometer(message: Message, ctx: Context, text: str) -> None:
+    """Записывает замер пробега из сообщения без суммы и молча помечает галочкой."""
+    km = extract_odometer(text)
+    if km is None:
+        return
+
+    await ctx.repo.upsert_person(
+        message.chat.id, message.from_user.id, display_name(message.from_user)
+    )
+    car = await ctx.repo.active_car(message.chat.id, message.from_user.id)
+    await ctx.repo.add_odometer(
+        chat_id=message.chat.id,
+        owner_id=message.from_user.id,
+        km=km,
+        at=message.date,
+        car=car,
+    )
+    await ctx.repo.touch_chat(message.chat.id, message.chat.title or "")
+    try:
+        await ctx.bot.set_message_reaction(
+            message.chat.id,
+            message.message_id,
+            reaction=[ReactionTypeEmoji(emoji=WRITTEN)],
+        )
+    except Exception:
+        log.debug("не смог поставить реакцию на замер пробега", exc_info=True)
 
 
 def display_name(user) -> str:
