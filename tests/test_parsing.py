@@ -102,18 +102,36 @@ def test_multiple_expenses_in_one_message():
     assert result.total == Decimal(1500)
 
 
-def test_amount_only_asks_without_category():
-    result = parse_message("1500р")
-    assert len(result.detections) == 1
-    assert result.detections[0].category is None
-    assert result.detections[0].confidence == Confidence.LOW
+def test_bare_amount_no_longer_triggers():
+    """Одной суммы мало: в чате постоянно летают числа не про машину."""
+    assert not parse_message("1500р")
+    assert parse_message("1500р").reason == "no_keyword"
 
 
-def test_short_message_with_number_is_treated_as_expense():
-    # два слова и число — это почти наверняка трата, даже без «р» на конце
-    result = parse_message("гидрач 3000")
+def test_short_message_with_unknown_word_stays_silent():
+    """Раньше «гидрач 3000» считалось тратой по краткости — слишком грубо."""
+    assert not parse_message("гидрач 3000")
+
+
+def test_explicit_form_works_without_keyword():
+    """«на тачку …» — запасной вход, когда слово боту незнакомо."""
+    result = parse_message("на тачку 3000 гидрач")
+    assert result.explicit
     assert len(result.detections) == 1
-    assert result.detections[0].category is None
+    assert result.detections[0].amount == Decimal(3000)
+    assert result.reason == "explicit"
+
+
+@pytest.mark.parametrize(
+    "text",
+    [
+        "в машину 1500 незамерзайка",
+        "на тачку: 2400 промывка форсунок",
+        "за машину 800 парковка",
+    ],
+)
+def test_explicit_variants(text):
+    assert parse_message(text).explicit
 
 
 @pytest.mark.parametrize(
@@ -133,14 +151,18 @@ def test_ignored(text):
 
 
 def test_learned_word_from_chat_lexicon():
-    assert parse_message("гидрач 3000р").detections[0].category is None
+    # Пока слово незнакомо — молчим
+    assert not parse_message("гидрач 3000р")
+    # Выучив, узнаём его сами
     learned = {"гидрач": Category.SERVICE}
     result = parse_message("гидрач 3000р", learned=learned)
     assert result.detections[0].category == Category.SERVICE
 
 
-def test_unknown_lemmas_collected_for_learning():
-    result = parse_message("гидрач 3000р")
+def test_unknown_lemmas_collected_only_from_explicit_form():
+    """Учимся там, где человек сам подтвердил, что речь про машину."""
+    assert parse_message("гидрач 3000р").unknown_lemmas == []
+    result = parse_message("на тачку 3000 гидрач")
     assert "гидрач" in result.unknown_lemmas
 
 

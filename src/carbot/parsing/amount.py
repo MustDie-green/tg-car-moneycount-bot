@@ -55,22 +55,23 @@ _MASKS = (
 # Марки топлива — голое число без валюты
 _FUEL_GRADES = {80, 92, 95, 98, 100, 102}
 
+# Минимум для числа без явной валюты. С «р»/«₽»/«к» планка обычная.
+BARE_MIN_AMOUNT = 100
+
 # Числа рядом с этими словами — пробег, а не деньги
 _ODOMETER_NEAR = re.compile(r"пробег|одометр|намотал|накатал", re.IGNORECASE)
 
-# Денежный сленг без цифр
+# Денежный сленг без цифр.
+# «Штука» отсюда сознательно убрана: в живой переписке это почти всегда
+# «вещь», а не тысяча рублей, и она давала больше всего ложных срабатываний.
 SLANG_AMOUNTS: dict[str, int] = {
     "полтинник": 50,
     "стольник": 100,
-    "двушка": 200,
     "пятихатка": 500,
     "пятихат": 500,
     "косарь": 1000,
     "косаря": 1000,
     "косарей": 1000,
-    "штука": 1000,
-    "штуку": 1000,
-    "штуки": 1000,
 }
 _SLANG_RE = re.compile(
     r"\b(?P<count>\d{1,2}\s+)?(?P<word>" + "|".join(SLANG_AMOUNTS) + r")\b",
@@ -151,7 +152,10 @@ def find_amounts(
             if len(m.group("num").replace(" ", "")) >= 5 and _ODOMETER_NEAR.search(window):
                 continue
 
-        if not (min_amount <= value <= max_amount):
+        # Голое число без валюты — планка выше: «до 78», «до 21» это что угодно,
+        # но не трата, а настоящих трат дешевле сотни почти не бывает
+        floor = min_amount if strong else max(min_amount, BARE_MIN_AMOUNT)
+        if not (floor <= value <= max_amount):
             continue
 
         found.append(AmountMatch(value=value, start=span[0], end=span[1], strong=strong))
@@ -168,7 +172,7 @@ def _find_slang(text: str, *, min_amount: int, max_amount: int) -> list[AmountMa
         count = int(m.group("count").strip()) if m.group("count") else 1
         value = Decimal(base * count)
         if min_amount <= value <= max_amount:
-            out.append(AmountMatch(value=value, start=m.start(), end=m.end(), strong=True))
+            out.append(AmountMatch(value=value, start=m.start(), end=m.end(), strong=False))
     return out
 
 

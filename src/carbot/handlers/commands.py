@@ -31,12 +31,18 @@ router = Router(name="commands")
 HELP = """<b>Автобухгалтерия</b> — считаю, кто сколько спустил на машину.
 
 <b>Как записать трату</b>
-Просто пишите в чат как обычно:
+Пишите слово про машину и сумму:
 · <code>бенз 2000</code>
 · <code>мойка 500р</code>
 · <code>колодки 6500 и развал 3000</code>
 · <code>заправка 42л 2800 пробег 123456</code>
 Я отвечу «На тачку?» — жмите «Да», и трата уедет в базу, а на сообщении появится 🫡
+
+На голое число я не реагирую: в чате их слишком много не про машину.
+Если слова я не знаю — начните с <code>на тачку</code>:
+· <code>на тачку 3000 гидрач</code>
+Такое пишу сразу, без вопросов, и заодно запоминаю слово «гидрач» —
+в следующий раз пойму его сам.
 
 Можно писать и просто <code>пробег 123456</code> — запишу замер и отмечу ✍️.
 Чем чаще пишете пробег, тем точнее я считаю цену километра и сроки замен.
@@ -53,6 +59,7 @@ HELP = """<b>Автобухгалтерия</b> — считаю, кто ско�
 /cars — весь парк чата с пробегами
 /to — настроить, что и когда менять (открою личку)
 /lexicon — какие слова я выучил в этом чате
+/detect — журнал: на что реагировал и на что молчал
 /export — выгрузка всех трат в CSV
 
 Первого числа каждого месяца сам присылаю итоги прошлого."""
@@ -263,6 +270,69 @@ async def cmd_service(message: Message, ctx: Context) -> None:
                 ]
             ]
         ),
+    )
+
+
+@router.message(Command("detect", "детект"))
+async def cmd_detect(message: Message, ctx: Context) -> None:
+    """Журнал наблюдений детектора: сводка в чат, подробности файлом.
+
+    Нужен, чтобы через пару недель разобрать на данных, где бот спрашивает зря,
+    а где молчит там, где не надо.
+    """
+    if not ctx.allows(message.chat.id):
+        return
+
+    stats = await ctx.repo.detect_stats(message.chat.id)
+    if not stats:
+        await message.reply(
+            "Журнал пуст. Я записываю сюда каждое сообщение, где встретилась "
+            "похожая на деньги сумма — и то, на что среагировал, и то, что "
+            "пропустил. Загляни через недельку."
+        )
+        return
+
+    asked_yes = sum(r["cnt"] for r in stats if r.get("answer") == "yes")
+    asked_no = sum(r["cnt"] for r in stats if r.get("answer") == "no")
+    timeouts = sum(r["cnt"] for r in stats if r.get("answer") == "timeout")
+    skipped = sum(
+        r["cnt"] for r in stats
+        if r["reason"].startswith(("no_keyword", "veto"))
+    )
+    total = sum(r["cnt"] for r in stats)
+
+    lines = [
+        f"<b>Журнал детектора</b> — {with_plural(total, 'сообщение', 'сообщения', 'сообщений')} с суммой",
+        "",
+        f"✅ подтвердили: {asked_yes}",
+        f"✖️ отказались: {asked_no}",
+        f"⏳ не ответили: {timeouts}",
+        f"🤐 промолчал сам: {skipped}",
+    ]
+    if asked_yes + asked_no:
+        precision = asked_yes / (asked_yes + asked_no) * 100
+        lines.append(f"\nПопадание в цель: {precision:.0f}%")
+
+    rows = await ctx.repo.detect_log(message.chat.id)
+    buffer = io.StringIO()
+    writer = csv.writer(buffer)
+    writer.writerow(["дата", "автор", "текст", "вердикт", "суммы", "спросил", "ответ"])
+    for row in rows:
+        writer.writerow([
+            row["at"].isoformat() if hasattr(row["at"], "isoformat") else row["at"],
+            row.get("author_name", ""),
+            row.get("text", ""),
+            row.get("reason", ""),
+            row.get("amounts", ""),
+            "да" if row.get("asked") else "нет",
+            row.get("answer") or "",
+        ])
+
+    await message.reply_document(
+        BufferedInputFile(
+            buffer.getvalue().encode("utf-8-sig"), filename="detect-log.csv"
+        ),
+        caption="\n".join(lines),
     )
 
 

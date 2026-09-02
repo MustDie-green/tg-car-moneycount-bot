@@ -67,6 +67,12 @@ class ParseResult:
     detections: list[Detection] = field(default_factory=list)
     # Леммы, которых нет в словаре — кандидаты на самообучение
     unknown_lemmas: list[str] = field(default_factory=list)
+    # Человек сам написал «на тачку …» — спрашивать «на тачку?» уже незачем
+    explicit: bool = False
+    # Почему детектор решил именно так — уходит в журнал наблюдений
+    reason: str = ""
+    # Суммы, которые заметили в тексте, даже если тратой их не признали
+    seen_amounts: list[str] = field(default_factory=list)
 
     def __bool__(self) -> bool:
         return bool(self.detections)

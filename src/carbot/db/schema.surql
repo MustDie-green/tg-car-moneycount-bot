@@ -100,3 +100,22 @@ DEFINE TABLE IF NOT EXISTS chat SCHEMAFULL;
 DEFINE FIELD IF NOT EXISTS chat_id ON chat TYPE int;
 DEFINE FIELD IF NOT EXISTS title ON chat TYPE string DEFAULT '';
 DEFINE FIELD IF NOT EXISTS last_seen ON chat TYPE datetime DEFAULT time::now();
+
+-- Журнал наблюдений детектора: каждое сообщение, где встретилась похожая на
+-- деньги сумма, вместе с вердиктом и (если спрашивали) ответом человека.
+-- Нужен, чтобы через пару недель посмотреть, где детектор врёт, на данных,
+-- а не на догадках.
+DEFINE TABLE IF NOT EXISTS detect_log SCHEMAFULL;
+DEFINE FIELD IF NOT EXISTS chat_id ON detect_log TYPE int;
+DEFINE FIELD IF NOT EXISTS message_id ON detect_log TYPE int;
+DEFINE FIELD IF NOT EXISTS author_id ON detect_log TYPE int;
+DEFINE FIELD IF NOT EXISTS author_name ON detect_log TYPE string DEFAULT '';
+DEFINE FIELD IF NOT EXISTS text ON detect_log TYPE string DEFAULT '';
+-- keyword:мойка / explicit / no_keyword / veto:стоить
+DEFINE FIELD IF NOT EXISTS reason ON detect_log TYPE string DEFAULT '';
+DEFINE FIELD IF NOT EXISTS amounts ON detect_log TYPE string DEFAULT '';
+DEFINE FIELD IF NOT EXISTS asked ON detect_log TYPE bool DEFAULT false;
+-- yes / no / timeout — чем кончился заданный вопрос
+DEFINE FIELD IF NOT EXISTS answer ON detect_log TYPE option<string>;
+DEFINE FIELD IF NOT EXISTS at ON detect_log TYPE datetime DEFAULT time::now();
+DEFINE INDEX IF NOT EXISTS detect_log_chat ON detect_log FIELDS chat_id, at;

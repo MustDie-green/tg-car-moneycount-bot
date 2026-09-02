@@ -104,11 +104,12 @@ async def test_declined_expense_is_not_saved(repo):
 
 async def test_chat_teaches_itself_a_new_word(repo):
     when = datetime.now(timezone.utc)
-    # Слова «гидрач» бот не знает, поэтому категорию выбирают кнопкой
+    # Слова «гидрач» бот не знает, поэтому траты заводят явной формой —
+    # она же и учит: незнакомые слова рядом становятся кандидатами в словарь
     for message_id in (10, 11):
         await confirm(
-            repo, text=f"гидрач {message_id * 100}р", author_id=ANTON, name="Антон",
-            message_id=message_id, when=when, action="service",
+            repo, text=f"на тачку {message_id * 100} гидрач", author_id=ANTON,
+            name="Антон", message_id=message_id, when=when, action="service",
         )
 
     learned = await repo.learned_words(CHAT, threshold=2)

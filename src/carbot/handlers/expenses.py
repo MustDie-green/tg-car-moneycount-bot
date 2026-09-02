@@ -72,6 +72,7 @@ async def on_message(message: Message, ctx: Context) -> None:
         # Суммы нет, но мог быть голый замер: «пробег 123456».
         # Это главный корм для оценки пробега, терять его жалко.
         await _maybe_odometer(message, ctx, text)
+        await _journal(message, ctx, text, result, asked=False)
         return
 
     if await ctx.repo.has_pending(message.chat.id, message.message_id):
@@ -79,8 +80,16 @@ async def on_message(message: Message, ctx: Context) -> None:
     if await ctx.repo.expenses_by_message(message.chat.id, message.message_id):
         return
 
+    # «на тачку 3000 гидрач» — человек уже сказал, что это про машину.
+    # Переспрашивать «На тачку?» тут глупо, сразу пишем.
+    if result.explicit and not any(d.needs_category for d in result.detections):
+        await _save_now(message, ctx, result)
+        await _journal(message, ctx, text, result, asked=False)
+        return
+
     question, keyboard = build_question(result, message.message_id, ctx.settings.currency)
     sent = await message.reply(question, reply_markup=keyboard)
+    await _journal(message, ctx, text, result, asked=True)
 
     await ctx.repo.touch_chat(message.chat.id, message.chat.title or "")
     await ctx.repo.save_pending(
@@ -94,6 +103,60 @@ async def on_message(message: Message, ctx: Context) -> None:
         unknown_lemmas=result.unknown_lemmas,
         spent_at=message.date,
         ttl_seconds=ctx.settings.pending_ttl,
+    )
+
+
+async def _journal(
+    message: Message, ctx: Context, text: str, result: ParseResult, *, asked: bool
+) -> None:
+    """Складывает в журнал каждое сообщение, где мелькнула похожая на деньги сумма.
+
+    Пишем и то, что отбросили: без отказов не понять, где детектор перестраховался.
+    """
+    if not result.seen_amounts:
+        return
+    try:
+        await ctx.repo.log_detection(
+            chat_id=message.chat.id,
+            message_id=message.message_id,
+            author_id=message.from_user.id,
+            author_name=display_name(message.from_user),
+            text=text,
+            reason=result.reason,
+            amounts=result.seen_amounts,
+            asked=asked,
+        )
+    except Exception:
+        # Журнал — вспомогательная штука, ронять из-за него разбор нельзя
+        log.debug("не смог записать наблюдение детектора", exc_info=True)
+
+
+async def _save_now(message: Message, ctx: Context, result: ParseResult) -> None:
+    """Явная форма: пишем сразу, без вопроса, и вешаем реакцию."""
+    await ctx.repo.touch_chat(message.chat.id, message.chat.title or "")
+    await ctx.repo.save_expenses(
+        chat_id=message.chat.id,
+        author_id=message.from_user.id,
+        author_name=display_name(message.from_user),
+        message_id=message.message_id,
+        detections=result.detections,
+        spent_at=message.date,
+        car=await ctx.repo.active_car(message.chat.id, message.from_user.id),
+    )
+    if result.unknown_lemmas:
+        category = result.detections[0].category
+        await ctx.repo.vote_words(
+            message.chat.id, result.unknown_lemmas, category, positive=True
+        )
+        ctx.forget_lexicon(message.chat.id)
+
+    total = sum((d.amount for d in result.detections), Decimal(0))
+    if not await _react(ctx, message.chat.id, message.message_id, total):
+        await message.reply(f"{SALUTE} {_summary(result.detections, ctx.settings.currency)}")
+    log.info(
+        "трата записана явной формой: чат=%s автор=%s %s",
+        message.chat.id, message.from_user.id,
+        _summary(result.detections, ctx.settings.currency),
     )
 
 
@@ -137,7 +200,10 @@ def build_question(
     needs_category = any(detection.needs_category for detection in result.detections)
 
     if needs_category:
-        text = f"На тачку? {money(result.total, currency)} — куда записать?"
+        # При явной форме «на тачку …» переспрашивать сам факт незачем —
+        # остаётся только уточнить категорию
+        lead = "Куда записать?" if result.explicit else "На тачку?"
+        text = f"{lead} {money(result.total, currency)}"
         rows = [
             [
                 _button(CATEGORY_EMOJI[category] + " " + CATEGORY_TITLE[category], message_id, action)
@@ -211,6 +277,7 @@ async def on_answer(callback: CallbackQuery, ctx: Context) -> None:
         ctx.forget_lexicon(chat_id)
         await ctx.repo.drop_pending(chat_id, message_id)
         await _delete(ctx, chat_id, pending["question_id"])
+        await ctx.repo.log_answer(chat_id, message_id, "no")
         await callback.answer("Ок, не считаем")
         return
 
@@ -237,6 +304,7 @@ async def on_answer(callback: CallbackQuery, ctx: Context) -> None:
         ctx.forget_lexicon(chat_id)
 
     await ctx.repo.drop_pending(chat_id, message_id)
+    await ctx.repo.log_answer(chat_id, message_id, "yes")
 
     total = sum((detection.amount for detection in detections), Decimal(0))
     reacted = await _react(ctx, chat_id, message_id, total)

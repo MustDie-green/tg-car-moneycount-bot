@@ -177,15 +177,60 @@ async def test_only_the_author_may_answer(harness):
     assert await ctx.repo.get_pending(CHAT, 23) is not None  # вопрос ещё висит
 
 
-async def test_category_buttons_teach_the_chat(harness):
+async def test_explicit_form_only_asks_for_the_category(harness):
+    """«на тачку N гидрач»: сам факт уже понятен, остаётся категория."""
     feed, bot, ctx = harness
     for message_id in (30, 31):
-        await feed({"message": message(f"гидрач {message_id * 100}р", message_id=message_id)})
+        await feed({
+            "message": message(f"на тачку {message_id * 100} гидрач", message_id=message_id)
+        })
         await feed({"callback_query": press(f"e:{message_id}:service")})
 
     saved = await ctx.repo.expenses_by_message(CHAT, 31)
     assert saved[0].category == Category.SERVICE
+    # Переспрашивать «На тачку?» незачем — человек уже это сказал
+    asked = [c.text for c in bot.of(SendMessage) if c.text]
+    assert not any("На тачку" in text for text in asked)
+    assert any("Куда записать" in text for text in asked)
     assert await ctx.learned(CHAT) == {"гидрач": Category.SERVICE}
+
+
+async def test_explicit_form_with_known_word_saves_instantly(harness):
+    """«на тачку 700 мойка» — категория ясна, вопрос не нужен вовсе."""
+    feed, bot, ctx = harness
+    await feed({"message": message("на тачку 700 мойка", message_id=35)})
+
+    saved = await ctx.repo.expenses_by_message(CHAT, 35)
+    assert saved and saved[0].amount == Decimal(700)
+    assert not bot.of(SendMessage), "никаких вопросов быть не должно"
+    assert [c.reaction[0].emoji for c in bot.of(SetMessageReaction)] == ["🫡"]
+
+
+async def test_ordinary_number_no_longer_asks(harness):
+    """Главная жалоба: бот дёргал вопросом на любое число в чате."""
+    feed, bot, ctx = harness
+    for text in ("прикольная штука", "давай 500 скинемся", "телефон за 90к взял"):
+        await feed({"message": message(text, message_id=hash(text) % 1000)})
+
+    assert not [c for c in bot.of(SendMessage) if "На тачку" in (c.text or "")]
+
+
+async def test_detector_journal_records_the_verdict(harness):
+    """В журнал попадает и то, на что бот среагировал, и то, что отбросил."""
+    feed, bot, ctx = harness
+    await feed({"message": message("мойка 500", message_id=60)})
+    await feed({"message": message("телефон за 90к взял", message_id=61)})
+
+    rows = {row["message_id"]: row for row in await ctx.repo.detect_log(CHAT)}
+    assert rows[60]["reason"].startswith("keyword:")
+    assert rows[60]["asked"] is True
+    assert rows[61]["reason"] == "no_keyword"
+    assert rows[61]["asked"] is False
+
+    # Ответ человека тоже уходит в журнал — по нему потом видно точность
+    await feed({"callback_query": press("e:60:yes")})
+    rows = {row["message_id"]: row for row in await ctx.repo.detect_log(CHAT)}
+    assert rows[60]["answer"] == "yes"
 
 
 async def test_stale_question_is_answered_politely(harness):

@@ -1,4 +1,11 @@
-"""Сборка всего вместе: текст сообщения → список распознанных трат."""
+"""Сборка всего вместе: текст сообщения → список распознанных трат.
+
+Главное правило: одной суммы мало. В чате друзей числа летают постоянно —
+кто-то скинулся на подарок, кто-то назвал зарплату, кто-то посчитал шаги.
+Поэтому трата признаётся тратой, только если рядом есть слово из автомобильного
+словаря. Если слова нет, но записать всё равно надо, есть явная форма:
+«на тачку 3000 гидрач» — она же учит бота новым словам.
+"""
 
 from __future__ import annotations
 
@@ -11,6 +18,15 @@ from .morph import analyze, index
 
 _TRIM = " \t\n\r,.;:!?-—–+«»\"'()[]и"
 _MAX_NOTE = 64
+
+# Явная форма записи: «на тачку 3000 гидрач», «в тачку 500 мойка».
+# Работает без ключевого слова и служит способом научить бота новому слову.
+EXPLICIT_RE = re.compile(
+    r"^\s*(?:на|в|за)?\s*"
+    r"(?:тачку|тачка|тачке|машину|машина|машине|авто|автомобиль|бричку|ласточку)"
+    r"\s*[:\-—]?\s*",
+    re.IGNORECASE,
+)
 
 
 def _segments(text: str, amounts: list[AmountMatch]) -> list[str]:
@@ -47,31 +63,33 @@ def parse_message(
 ) -> ParseResult:
     """Главная точка входа детектора.
 
-    Бот спрашивает «На тачку?» только если сработало ключевое слово либо
-    у суммы был явный денежный маркер (₽/руб/к). Голое число в чате
-    игнорируется — иначе бот задолбает всех вопросами.
+    Возвращает не только находки, но и причину решения — она уходит в журнал
+    наблюдений, чтобы через пару недель было видно, где детектор промахивается.
     """
-    empty = ParseResult()
     if not text or text.lstrip().startswith("/"):
-        return empty
+        return ParseResult(reason="command")
 
-    whole = analyze(text)
-    if index.has_veto(whole):
-        return empty
+    explicit_match = EXPLICIT_RE.match(text)
+    explicit = explicit_match is not None
+    # Из явной формы вырезаем сам префикс: «на тачку 3000 мойка» → «3000 мойка»
+    body = text[explicit_match.end() :] if explicit_match else text
 
-    amounts = find_amounts(text, min_amount=min_amount, max_amount=max_amount)
+    whole = analyze(body)
+
+    amounts = find_amounts(body, min_amount=min_amount, max_amount=max_amount)
     if not amounts:
-        return empty
+        return ParseResult(reason="no_amount", explicit=explicit)
 
-    # «гидрач 3000» — короткая реплика из пары слов с одним числом выглядит
-    # как трата, даже если валюту не написали и слово боту незнакомо.
-    shorthand = (
-        1 <= len(whole.tokens) <= 2
-        and len(amounts) == 1
-        and amounts[0].value >= 100
-    )
+    # Сумму ищем до проверки стоп-слов нарочно: тогда и у отброшенных сообщений
+    # в журнале наблюдений видно, какое число там было
+    seen = [str(a.value) for a in amounts]
 
-    segments = _segments(text, amounts)
+    # Стоп-слова («продал», «должен», «подорожал») перебивают всё, кроме явной формы
+    if not explicit:
+        veto = index.has_veto(whole)
+        if veto:
+            return ParseResult(reason=f"veto:{veto}", seen_amounts=seen)
+    segments = _segments(body, amounts)
     detections: list[Detection] = []
     any_static_hit = False
 
@@ -79,10 +97,14 @@ def parse_message(
         hit = index.match(analyze(segment), learned)
         if hit is None and len(amounts) == 1:
             hit = index.match(whole, learned)
-        if hit is None and not amount.strong and not shorthand:
+
+        # Ключевое слово обязательно. Без него молчим — кроме явной формы,
+        # где человек уже сказал, что это про машину.
+        if hit is None and not explicit:
             continue
         if hit is not None:
             any_static_hit = True
+
         detections.append(
             Detection(
                 amount=amount.value,
@@ -94,13 +116,25 @@ def parse_message(
         )
 
     if not detections:
-        return empty
+        return ParseResult(reason="no_keyword", seen_amounts=seen)
 
     _inherit_category(detections)
-    _attach_fuel_data(text, detections)
+    _attach_fuel_data(body, detections)
 
-    unknown = [] if any_static_hit else index.learnable_lemmas(whole)
-    return ParseResult(detections=detections, unknown_lemmas=unknown)
+    triggers = [d.trigger for d in detections if d.trigger]
+    reason = "explicit" if explicit else f"keyword:{triggers[0] if triggers else '?'}"
+
+    # Учим словарь только с явной формы: там человек сам подтвердил, что это
+    # про машину, а значит незнакомые слова рядом — надёжные кандидаты.
+    unknown = index.learnable_lemmas(whole) if explicit and not any_static_hit else []
+
+    return ParseResult(
+        detections=detections,
+        unknown_lemmas=unknown,
+        explicit=explicit,
+        reason=reason,
+        seen_amounts=seen,
+    )
 
 
 def _inherit_category(detections: list[Detection]) -> None:

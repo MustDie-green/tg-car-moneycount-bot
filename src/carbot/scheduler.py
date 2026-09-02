@@ -143,4 +143,6 @@ async def cleanup_pendings(ctx: Context) -> None:
             await ctx.bot.delete_message(chat_id=chat_id, message_id=row["question_id"])
         except Exception as error:  # noqa: BLE001
             log.debug("протухший вопрос %s не удалился: %s", row["question_id"], error)
+        # Вопрос без ответа — тоже сигнал: скорее всего бот спросил зря
+        await ctx.repo.log_answer(chat_id, message_id, "timeout")
         await ctx.repo.drop_pending(chat_id, message_id)

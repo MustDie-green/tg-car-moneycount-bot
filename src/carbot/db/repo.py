@@ -475,6 +475,61 @@ class Repo:
             },
         )
 
+    # --- Журнал наблюдений детектора -----------------------------------------
+
+    async def log_detection(
+        self,
+        *,
+        chat_id: int,
+        message_id: int,
+        author_id: int,
+        author_name: str,
+        text: str,
+        reason: str,
+        amounts: list[str],
+        asked: bool,
+    ) -> None:
+        """Пишем каждое сообщение, где мелькнула похожая на деньги сумма."""
+        await self.db.query(
+            "UPSERT detect_log:[$chat, $msg] SET chat_id = $chat, message_id = $msg, "
+            "author_id = $author, author_name = $name, text = $text, "
+            "reason = $reason, amounts = $amounts, asked = $asked, at = time::now()",
+            {
+                "chat": chat_id,
+                "msg": message_id,
+                "author": author_id,
+                "name": author_name,
+                "text": text[:300],
+                "reason": reason,
+                "amounts": ",".join(amounts),
+                "asked": asked,
+            },
+        )
+
+    async def log_answer(self, chat_id: int, message_id: int, answer: str) -> None:
+        """Чем кончился заданный вопрос: yes, no или timeout."""
+        await self.db.query(
+            "UPDATE detect_log:[$chat, $msg] SET answer = $answer",
+            {"chat": chat_id, "msg": message_id, "answer": answer},
+        )
+
+    async def detect_log(self, chat_id: int, limit: int = 2000) -> list[dict[str, Any]]:
+        rows = await self.db.query(
+            "SELECT message_id, author_name, text, reason, amounts, asked, answer, at "
+            f"FROM detect_log WHERE chat_id = $chat ORDER BY at DESC LIMIT {int(limit)}",
+            {"chat": chat_id},
+        )
+        return list(rows or [])
+
+    async def detect_stats(self, chat_id: int) -> list[dict[str, Any]]:
+        """Сколько раз каждый вердикт встречался и чем кончился."""
+        rows = await self.db.query(
+            "SELECT reason, answer, count() AS cnt FROM detect_log "
+            "WHERE chat_id = $chat GROUP BY reason, answer",
+            {"chat": chat_id},
+        )
+        return list(rows or [])
+
     # --- Личка ---------------------------------------------------------------
 
     async def bind_dm(self, tg_id: int, chat_id: int) -> None:
