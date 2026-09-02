@@ -14,6 +14,7 @@ from aiogram.enums import ParseMode
 from aiogram.methods import (
     DeleteMessage,
     EditMessageText,
+    SendDocument,
     SendMessage,
     SetMessageReaction,
 )
@@ -269,3 +270,30 @@ async def test_help_command_answers(harness):
     feed, bot, _ = harness
     await feed({"message": message("/help", message_id=60)})
     assert "Автобухгалтерия" in bot.of(SendMessage)[0].text
+
+
+async def test_detect_command_reports_and_exports(harness):
+    """Сводка по журналу и выгрузка — то, чем детект правится по данным."""
+    feed, bot, ctx = harness
+
+    await feed({"message": message("/detect", message_id=70)})
+    assert "Журнал пуст" in bot.of(SendMessage)[-1].text
+
+    await feed({"message": message("мойка 500", message_id=71)})
+    await feed({"callback_query": press("e:71:yes")})
+    await feed({"message": message("телефон за 90к взял", message_id=72)})
+
+    bot.calls.clear()
+    await feed({"message": message("/detect", message_id=73)})
+
+    documents = bot.of(SendDocument)
+    assert documents, "журнал должен приезжать файлом"
+    caption = documents[0].caption
+    assert "подтвердили: 1" in caption
+    assert "промолчал сам: 1" in caption
+    assert "Попадание в цель: 100%" in caption
+
+    body = documents[0].document.data.decode("utf-8-sig")
+    assert "телефон за 90к взял" in body
+    assert "no_keyword" in body
+    assert "keyword:" in body
