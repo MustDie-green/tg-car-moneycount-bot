@@ -162,7 +162,6 @@ def personal_report() -> PersonalReport:
         cost=CostPerKm(
             total=Decimal("31.24"),
             fuel=Decimal("5.12"),
-            without_outlier=Decimal("9.80"),
             distance=8400,
             days=124,
             readings=11,

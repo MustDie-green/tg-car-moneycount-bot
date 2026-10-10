@@ -94,10 +94,11 @@ async def load_all(
         if start is not None and end is not None:
             garage.month_km = mileage.distance_between(readings, start, end)
 
-        expenses = await repo.expenses_of_person(chat_id, owner_id)
-        garage.cost = cost.per_km(readings, expenses)
-
         plans = [p for p in plans_by_owner.get(owner_id, []) if p.car_slug == garage.slug]
+        expenses = await repo.expenses_of_person(chat_id, owner_id)
+        intervals = {p.kind: p.interval_km for p in plans if p.interval_km}
+        garage.cost = cost.per_km(readings, expenses, intervals)
+
         garage.due = service.upcoming(plans, garage.mileage, now)
 
         garages[owner_id] = garage

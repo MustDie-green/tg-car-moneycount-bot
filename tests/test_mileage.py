@@ -18,7 +18,7 @@ def reading(days: int, km: int) -> Reading:
     return Reading(at=days_ago(days), km=km)
 
 
-def expense(days: int, amount, category=Category.SERVICE, odometer=None):
+def expense(days: int, amount, category=Category.SERVICE, odometer=None, note=""):
     return Expense(
         chat_id=-100,
         author_id=1,
@@ -26,7 +26,7 @@ def expense(days: int, amount, category=Category.SERVICE, odometer=None):
         message_id=1,
         amount=Decimal(amount),
         category=category,
-        note="",
+        note=note,
         spent_at=days_ago(days),
         odometer=odometer,
     )
@@ -150,13 +150,43 @@ def test_per_km_is_confident_on_real_data():
     assert result.fuel == Decimal(2)
 
 
-def test_per_km_separates_one_off_repair():
+def _routine(days_list, amount=2_000):
+    """Обычные заправки: задают «типичный чек», на фоне которого видно крупное."""
+    return [expense(day, amount, Category.FUEL) for day in days_list]
+
+
+def test_repair_without_interval_spreads_over_30k():
+    """Подрамник за 60 000 на окне в 10 000 км — это треть, а не всё."""
     readings = [reading(180, 100_000), reading(90, 105_000), reading(0, 110_000)]
-    expenses = [expense(150, 5_000, Category.FUEL), expense(60, 95_000)]
+    expenses = _routine([170, 150, 120, 100, 80, 60, 40, 20]) + [
+        expense(60, 60_000, note="замена подрамника")
+    ]
     result = cost.per_km(readings, expenses)
     assert result is not None
-    assert result.total == Decimal(10)
-    assert result.without_outlier == Decimal("0.5")
+    # Бензин 16 000 и треть подрамника 20 000 — на 10 000 км
+    assert result.total == Decimal("3.6")
+    assert result.deferred == Decimal(40_000)
+
+
+def test_service_spreads_over_its_own_interval():
+    """Масло живёт до следующей замены масла — по интервалу из плана машины."""
+    readings = [reading(60, 100_000), reading(30, 101_000), reading(0, 102_000)]
+    expenses = _routine([50, 40, 20, 10]) + [
+        expense(45, 21_000, note="ТО масло и фильтры")
+    ]
+    result = cost.per_km(readings, expenses, intervals={"oil_engine": 7_000})
+    assert result is not None
+    # 2000 км окна из 7000 км масла — две седьмых от 21 000, то есть 6000
+    assert result.by_category[Category.SERVICE] == Decimal("3.00")
+
+
+def test_window_start_fill_is_not_counted():
+    """Бензин заправки в точке старта сожжён до окна — в цену км не идёт."""
+    readings = [reading(60, 100_000), reading(30, 101_000), reading(0, 102_000)]
+    start_fill = expense(60, 4_000, Category.FUEL)
+    result = cost.per_km(readings, [start_fill, expense(10, 2_000, Category.FUEL)])
+    assert result is not None
+    assert result.total == Decimal("1.00")
 
 
 def test_per_km_without_readings():
