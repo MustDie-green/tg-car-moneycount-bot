@@ -247,7 +247,7 @@ async def test_expense_browser_lists_and_filters(harness):
     for index, (amount, category, note) in enumerate(
         [
             (2500, Category.FUEL, "бенз"),
-            (600, Category.OTHER, "мойка"),
+            (600, Category.CARE, "мойка"),
             (8000, Category.SERVICE, "колодки"),
         ]
     ):

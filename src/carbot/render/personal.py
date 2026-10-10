@@ -8,7 +8,7 @@ from .. import timeutil
 from ..formatting import decimal_str, money, money_short, with_plural
 from ..models import Category, CATEGORY_TITLE
 from ..reporting import PersonalReport
-from . import icons, svg, theme
+from . import blocks, icons, svg, theme
 from .text import FontBook
 
 ZERO = Decimal(0)
@@ -39,7 +39,7 @@ def render_personal(
     y = _header(body, report, fonts, currency)
     y = _section(body, y, "ПОСЛЕДНИЕ ПОЛГОДА")
     y = _history_chart(body, report, fonts, y, currency)
-    y = _category_strip(body, report, y, currency)
+    y = _category_strip(body, report, fonts, y, currency)
     y = _stats(body, report, fonts, y, currency)
     if report.cost is not None or report.month_km:
         y = _mileage(body, report, y, currency)
@@ -142,30 +142,10 @@ def _history_chart(
     return y + CHART_H + 24
 
 
-def _category_strip(body: list[str], report: PersonalReport, y: float, currency: str) -> float:
-    available = theme.WIDTH - theme.PAD * 2 - 16 * 2
-    pill_w = available / 3
-
-    for position, category in enumerate(Category):
-        x = theme.PAD + position * (pill_w + 16)
-        amount = report.by_category.get(category, ZERO)
-        color = theme.CATEGORY_COLOR[category]
-        body.append(svg.rect(x, y, pill_w, PILL_H, rx=20, fill=theme.CARD))
-        body.append(svg.rect(x, y, 4, PILL_H, rx=2, fill=color, opacity=0.9))
-        body.append(icons.category_icon(category, x + 22, y + 21, 26, color, width=2.1))
-        body.append(
-            svg.text(
-                x + 62, y + 36, CATEGORY_TITLE[category].upper(),
-                size=13, weight=700, fill=theme.MUTED, tracking=1.4,
-            )
-        )
-        body.append(
-            svg.text(
-                x + 62, y + 66, money(amount, currency),
-                size=23, weight=700, fill=theme.TEXT if amount else theme.DIM,
-            )
-        )
-    return y + PILL_H + 20
+def _category_strip(
+    body: list[str], report: PersonalReport, fonts: FontBook, y: float, currency: str
+) -> float:
+    return blocks.category_strip(body, report.by_category, fonts, y, currency) + 20
 
 
 def _stats(

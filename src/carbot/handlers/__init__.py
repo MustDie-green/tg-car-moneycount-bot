@@ -1,6 +1,6 @@
 from aiogram import Router
 
-from . import commands, expenses, private
+from . import commands, expenses, private, service_flow
 
 _root: Router | None = None
 
@@ -17,10 +17,12 @@ def build_router() -> Router:
         # Порядок важен: личка забирает своё до общих команд (там свой /start),
         # а детект трат идёт последним — он самый жадный
         _root = Router(name="root")
+        # Ответ пробегом на «Отметить в ТО?» должен перехватываться раньше всех
+        _root.include_router(service_flow.router)
         _root.include_router(private.router)
         _root.include_router(commands.router)
         _root.include_router(expenses.router)
     return _root
 
 
-__all__ = ["build_router", "commands", "expenses", "private"]
+__all__ = ["build_router", "commands", "expenses", "private", "service_flow"]

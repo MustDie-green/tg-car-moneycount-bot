@@ -7,6 +7,7 @@
 
 from __future__ import annotations
 
+import re
 from dataclasses import dataclass
 from datetime import datetime, timedelta
 from decimal import Decimal
@@ -241,3 +242,91 @@ def parse_interval_km(text: str) -> int | None:
     if not 100 <= value <= 500_000:
         return None
     return int(value)
+
+
+# --- Что поменяли: позиции ТО из текста траты --------------------------------
+
+# Однозначные слова. Проверяются по началу токена, а не по лемме: pymorphy
+# путается в сленге вроде «салонник» и «тормозуха»
+_KIND_PREFIXES: tuple[tuple[str, tuple[str, ...]], ...] = (
+    ("brake_fluid", ("тормозух", "тормозн жидк")),
+    ("filter_cabin", ("салонник",)),
+    ("filter_air", ("воздушник",)),
+    ("spark_plugs", ("свеч",)),
+    ("brake_pads", ("колодк",)),
+    ("coolant", ("антифриз", "тосол")),
+    ("timing", ("грм",)),
+    ("tires_seasonal", ("переобу", "шиномонтаж")),
+    ("insurance", ("осаго", "каско", "страховк")),
+    ("inspection", ("техосмотр",)),
+    ("oil_transfer", ("раздатк", "редуктор")),
+)
+
+# «фильтр» с уточнением перед ним
+_FILTER_KINDS = {
+    "воздушный": "filter_air",
+    "салонный": "filter_cabin",
+    "топливный": "filter_fuel",
+}
+
+_GEARBOX_WORDS = {"акпп", "мкпп", "вариатор", "коробка", "dsg", "робот"}
+
+_UPPER_TO = re.compile(r"(?<![А-ЯЁа-яёA-Za-z])ТО(?![А-ЯЁа-яёA-Za-z])")
+
+
+def detect_kinds(text: str) -> tuple[list[str], list[str]]:
+    """Какие позиции ТО упомянуты в трате.
+
+    Возвращает два списка: что наверняка поменяли (отмечается галочкой сразу)
+    и что стоит предложить (без галочки). «ТО 15000» — это почти всегда масло,
+    а фильтры могли поменять, а могли и нет: пусть человек отметит сам.
+    """
+    from .parsing.morph import analyze
+
+    analysis = analyze(text)
+    lemmas, tokens = analysis.lemmas, analysis.tokens
+    sure: list[str] = []
+    maybe: list[str] = []
+
+    def add(target: list[str], kind: str) -> None:
+        if kind not in sure and kind not in maybe:
+            target.append(kind)
+
+    for kind, prefixes in _KIND_PREFIXES:
+        if any(token.startswith(prefix) for token in tokens for prefix in prefixes):
+            add(sure, kind)
+
+    filters = [
+        _FILTER_KINDS[previous]
+        for previous, current in zip(lemmas, lemmas[1:])
+        if current == "фильтр" and previous in _FILTER_KINDS
+    ]
+    for kind in filters:
+        add(sure, kind)
+
+    if "масло" in lemmas:
+        gearbox = any(word in _GEARBOX_WORDS for word in lemmas)
+        if gearbox:
+            add(sure, "oil_gearbox")
+        elif "oil_transfer" not in sure:
+            add(sure, "oil_engine")
+
+    is_maintenance = bool(_UPPER_TO.search(text)) or "техобслуживание" in lemmas
+    if is_maintenance:
+        add(sure, "oil_engine")
+
+    # «масло + фильтры» или «ТО»: какие именно фильтры — не сказано
+    if (is_maintenance or "фильтр" in lemmas) and not filters:
+        add(maybe, "filter_air")
+        add(maybe, "filter_cabin")
+
+    return sure, maybe
+
+
+def parse_odometer(text: str) -> int | None:
+    """Пробег, который человек прислал числом: «187950», «187 950 км»."""
+    raw = re.sub(r"[\s  ]|км|km|\.", "", text.strip().lower())
+    if not raw.isdigit():
+        return None
+    value = int(raw)
+    return value if 100 <= value <= 3_000_000 else None

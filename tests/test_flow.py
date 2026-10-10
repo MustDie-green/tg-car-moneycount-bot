@@ -66,7 +66,7 @@ async def confirm(repo, *, text, author_id, name, message_id, when, action="yes"
     chosen = None if action == "yes" else Category(action)
     for detection in detections:
         if detection.category is None:
-            detection.category = chosen or Category.OTHER
+            detection.category = chosen or Category.CARE
     if unknown and chosen is not None:
         await repo.vote_words(CHAT, unknown, chosen, positive=True)
 
@@ -88,7 +88,7 @@ async def test_full_confirmation_flow(repo):
         repo, text="мойка 500", author_id=ANTON, name="Антон", message_id=1, when=when
     )
     assert len(saved) == 1
-    assert saved[0].category == Category.OTHER
+    assert saved[0].category == Category.CARE
     assert saved[0].amount == Decimal(500)
     assert await repo.get_pending(CHAT, 1) is None
 
@@ -204,28 +204,46 @@ async def test_undo_removes_the_last_expense(repo):
 # --- Чистая логика без базы --------------------------------------------------
 
 
-def test_fuel_stats_ignores_absurd_segments():
+def _fill(odometer, liters, amount, day):
     from carbot.models import Expense
 
-    def fill(odometer, liters, amount, day):
-        return Expense(
-            chat_id=CHAT, author_id=ANTON, author_name="Антон", message_id=day,
-            amount=Decimal(amount), category=Category.FUEL, note="",
-            spent_at=datetime(2026, 7, day, tzinfo=timezone.utc),
-            liters=Decimal(liters), odometer=odometer,
-        )
+    return Expense(
+        chat_id=CHAT, author_id=ANTON, author_name="Антон", message_id=day,
+        amount=Decimal(amount), category=Category.FUEL, note="",
+        spent_at=datetime(2026, 7, day, tzinfo=timezone.utc),
+        liters=Decimal(liters), odometer=odometer,
+    )
 
+
+def test_fuel_stats_counts_fills_without_odometer():
+    """Пропустил пробег на заправке — её литры всё равно сожжены на этих км."""
     stats = fuel_stats(
         [
-            fill(100000, 40, 2800, 1),
-            fill(100500, 40, 2800, 5),
-            fill(100501, 40, 2800, 6),  # опечатка в пробеге — отрезок выкидываем
-            fill(101000, 40, 2800, 9),
+            _fill(100000, 40, 4000, 1),
+            _fill(None, 30, 3000, 4),  # пробег не записали
+            _fill(101000, 50, 5000, 9),
         ]
     )
     assert stats is not None
+    # 30 + 50 литров на 1000 км. Старый метод видел только последние 50 — 5 л/100
     assert stats.liters_per_100 == Decimal("8.0")
-    assert stats.fills == 3
+    assert stats.rub_per_km == Decimal("8.00")
+
+
+def test_fuel_stats_drops_odometer_typos():
+    """«186567» вместо «187567» и лишняя цифра не ломают расход."""
+    stats = fuel_stats(
+        [
+            _fill(100000, 40, 4000, 1),
+            _fill(99500, 40, 4000, 3),  # опечатка назад
+            _fill(1005000, 40, 4000, 5),  # лишняя цифра
+            _fill(101000, 40, 4000, 9),
+        ]
+    )
+    assert stats is not None
+    # Опечатки выпали как замеры, но их литры честно залиты между крайними точками
+    assert stats.liters_per_100 == Decimal("12.0")
+    assert stats.distance == 1000
 
 
 def test_titles_are_unique_per_person():
@@ -234,7 +252,7 @@ def test_titles_are_unique_per_person():
     people = [
         PersonMonth(1, "А", Decimal(30000), {Category.FUEL: Decimal(30000)}, 5, rank=1, prev_rank=4),
         PersonMonth(2, "Б", Decimal(20000), {Category.SERVICE: Decimal(20000)}, 3, rank=2, prev_rank=1),
-        PersonMonth(3, "В", Decimal(1000), {Category.OTHER: Decimal(1000)}, 1, rank=3, prev_rank=2),
+        PersonMonth(3, "В", Decimal(1000), {Category.CARE: Decimal(1000)}, 1, rank=3, prev_rank=2),
     ]
     assign_titles(people, black_swan_id=2)
     titles = [person.title for person in people]

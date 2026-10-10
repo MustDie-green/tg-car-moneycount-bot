@@ -11,25 +11,42 @@ from enum import StrEnum
 class Category(StrEnum):
     FUEL = "fuel"
     SERVICE = "service"
-    OTHER = "other"
+    FINES = "fines"
+    CARE = "care"
+    STATE = "state"
+
+    @classmethod
+    def _missing_(cls, value: object) -> "Category | None":
+        # «Остальное» из первой версии разнесено по трём категориям. Пока
+        # миграция не прошла, старые записи читаются как «уход» — туда
+        # попадала большая часть: мойки, омывайка, дворники.
+        if value == "other":
+            return cls.CARE
+        return None
 
 
 CATEGORY_TITLE: dict[Category, str] = {
     Category.FUEL: "Бензин",
     Category.SERVICE: "Ремонт и ТО",
-    Category.OTHER: "Остальное",
+    Category.FINES: "Штрафы",
+    Category.CARE: "Уход",
+    Category.STATE: "Государство",
 }
 
 CATEGORY_EMOJI: dict[Category, str] = {
     Category.FUEL: "⛽",
     Category.SERVICE: "🔧",
-    Category.OTHER: "🧽",
+    Category.FINES: "🚨",
+    Category.CARE: "🧽",
+    Category.STATE: "🏛",
 }
 
 CATEGORY_SHORT: dict[Category, str] = {
     Category.FUEL: "бенз",
     Category.SERVICE: "ремонт",
-    Category.OTHER: "прочее",
+    Category.FINES: "штраф",
+    Category.CARE: "уход",
+    Category.STATE: "гос",
 }
 
 
@@ -126,7 +143,8 @@ class PersonMonth:
     count: int
     rank: int = 0
     prev_rank: int | None = None
-    title: str | None = None
+    # Звания месяца, самое яркое первым. Не больше двух на человека
+    titles: list[str] = field(default_factory=list)
     avatar: bytes | None = None
     # Заполняется из гаража: машина, пробег и цена километра
     car_title: str | None = None
@@ -134,6 +152,15 @@ class PersonMonth:
     month_km: int | None = None
     rub_per_km: Decimal | None = None
     cost_low_data: bool = False
+    # Для званий: расход, число заправок и трат глубокой ночью
+    liters_per_100: Decimal | None = None
+    fuel_count: int = 0
+    night_count: int = 0
+
+    @property
+    def title(self) -> str | None:
+        """Главное звание — для мест, где помещается только одно."""
+        return self.titles[0] if self.titles else None
 
     @property
     def rank_delta(self) -> int | None:

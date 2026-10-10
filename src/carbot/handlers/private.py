@@ -25,6 +25,7 @@ from .. import garage, service, timeutil
 from ..formatting import money
 from ..models import CATEGORY_EMOJI, CATEGORY_SHORT, Category
 from ..services import Context
+from . import service_flow
 
 log = logging.getLogger(__name__)
 router = Router(name="private")
@@ -238,6 +239,7 @@ async def _show_position(
             InlineKeyboardButton(text="Следующая ▶", callback_data="dm:next"),
         ],
     ]
+    keyboard.append([InlineKeyboardButton(text="✅ Заменил", callback_data="dm:done")])
     if plan.configured:
         keyboard.append(
             [InlineKeyboardButton(text="🗑 Не следить", callback_data="dm:drop")]
@@ -369,6 +371,20 @@ async def ask_monthly(call: CallbackQuery, state: FSMContext) -> None:
         "потом буду считать по ним.",
         _cancel_keyboard(),
     )
+
+
+@router.callback_query(F.data == "dm:done")
+async def mark_done(call: CallbackQuery, ctx: Context, state: FSMContext) -> None:
+    """Заменил — тот же вопрос, что и в чате: пробег прикинут, можно поправить."""
+    data = await state.get_data()
+    sent = await service_flow.offer_in_dm(
+        ctx,
+        group_id=data["chat_id"],
+        owner_id=call.from_user.id,
+        offered=[data["kind"]],
+        selected=[data["kind"]],
+    )
+    await call.answer() if sent else await call.answer("Сначала заведи машину", show_alert=True)
 
 
 @router.callback_query(F.data == "dm:drop")
@@ -622,6 +638,13 @@ async def _save(ctx: Context, state: FSMContext, owner_id: int, **fields) -> Non
         "next_at": plan.next_at,
     }
     merged.update(fields)
+    # Новая «последняя замена» отменяет старый план «следующая на …»: иначе
+    # план, назначенный до замены, считался важнее и замена выглядела
+    # просроченной сразу после того, как её сделали
+    if "last_km" in fields:
+        merged["next_km"] = None
+    if "last_at" in fields:
+        merged["next_at"] = None
 
     # Интервал по умолчанию подставляем, чтобы одной точки хватило для расчёта
     kind = service.BY_KEY.get(data["kind"])
@@ -637,6 +660,8 @@ async def _save(ctx: Context, state: FSMContext, owner_id: int, **fields) -> Non
         kind=data["kind"],
         **merged,
     )
+    if "last_km" in fields or "last_at" in fields:
+        await ctx.repo.clear_reminder(data["chat_id"], owner_id, data["car_slug"], data["kind"])
 
 
 async def _reply_position(

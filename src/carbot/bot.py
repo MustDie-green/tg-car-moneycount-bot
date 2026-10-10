@@ -10,6 +10,7 @@ from aiogram.enums import ParseMode
 
 from .config import Settings, settings as default_settings
 from .db import Database, Repo
+from .db.migrations import run_all as run_migrations
 from .handlers import build_router
 from .render import load_fonts
 from .scheduler import setup_scheduler
@@ -33,6 +34,7 @@ async def run(settings: Settings | None = None) -> None:
         password=settings.db_password,
     )
     await database.connect()
+    await run_migrations(database)
 
     bot = Bot(
         token=settings.bot_token,

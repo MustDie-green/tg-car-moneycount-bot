@@ -62,8 +62,11 @@ DEFINE FIELD IF NOT EXISTS author_id ON expense TYPE int;
 DEFINE FIELD IF NOT EXISTS author_name ON expense TYPE string;
 DEFINE FIELD IF NOT EXISTS message_id ON expense TYPE int;
 DEFINE FIELD IF NOT EXISTS amount ON expense TYPE decimal;
-DEFINE FIELD IF NOT EXISTS category ON expense TYPE string
-    ASSERT $value IN ['fuel', 'service', 'other'];
+-- OVERWRITE, а не IF NOT EXISTS: список категорий менялся, и старое
+-- ограничение в уже созданной базе иначе так и осталось бы прежним.
+-- 'other' оставлен, пока миграция не разнесла старые записи по новым.
+DEFINE FIELD OVERWRITE category ON expense TYPE string
+    ASSERT $value IN ['fuel', 'service', 'fines', 'care', 'state', 'other'];
 DEFINE FIELD IF NOT EXISTS note ON expense TYPE string DEFAULT '';
 DEFINE FIELD IF NOT EXISTS liters ON expense TYPE option<decimal>;
 DEFINE FIELD IF NOT EXISTS odometer ON expense TYPE option<int>;
@@ -119,3 +122,24 @@ DEFINE FIELD IF NOT EXISTS asked ON detect_log TYPE bool DEFAULT false;
 DEFINE FIELD IF NOT EXISTS answer ON detect_log TYPE option<string>;
 DEFINE FIELD IF NOT EXISTS at ON detect_log TYPE datetime DEFAULT time::now();
 DEFINE INDEX IF NOT EXISTS detect_log_chat ON detect_log FIELDS chat_id, at;
+
+-- Открытый вопрос «Отметить в ТО?». id составной: service_ask:[msg_chat, message_id]
+-- msg_chat — где висит сообщение с кнопками (общий чат или личка),
+-- group_id — чат, к которому относятся машина и её обслуживание.
+DEFINE TABLE IF NOT EXISTS service_ask SCHEMAFULL;
+DEFINE FIELD IF NOT EXISTS msg_chat ON service_ask TYPE int;
+DEFINE FIELD IF NOT EXISTS message_id ON service_ask TYPE int;
+DEFINE FIELD IF NOT EXISTS group_id ON service_ask TYPE int;
+DEFINE FIELD IF NOT EXISTS owner_id ON service_ask TYPE int;
+DEFINE FIELD IF NOT EXISTS car ON service_ask TYPE record<car>;
+DEFINE FIELD IF NOT EXISTS car_slug ON service_ask TYPE string;
+DEFINE FIELD IF NOT EXISTS car_title ON service_ask TYPE string;
+DEFINE FIELD IF NOT EXISTS offered ON service_ask TYPE array<string>;
+DEFINE FIELD IF NOT EXISTS selected ON service_ask TYPE array<string>;
+DEFINE FIELD IF NOT EXISTS km ON service_ask TYPE option<int>;
+-- km прикинут по темпу езды, а не измерен
+DEFINE FIELD IF NOT EXISTS km_estimated ON service_ask TYPE bool DEFAULT false;
+-- ждём, что человек ответит на сообщение своим пробегом
+DEFINE FIELD IF NOT EXISTS awaiting_km ON service_ask TYPE bool DEFAULT false;
+DEFINE FIELD IF NOT EXISTS at ON service_ask TYPE datetime;
+DEFINE FIELD IF NOT EXISTS expires_at ON service_ask TYPE datetime;

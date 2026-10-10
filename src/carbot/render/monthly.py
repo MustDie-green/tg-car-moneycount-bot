@@ -16,7 +16,7 @@ from ..models import (
     ServiceHint,
 )
 from ..reporting import month_delta_text
-from . import icons, svg, theme
+from . import blocks, icons, svg, theme
 from .text import FontBook
 
 ZERO = Decimal(0)
@@ -28,6 +28,7 @@ PILL_GAP = 16
 ROW_H = 108
 ROW_GAP = 12
 SERVICE_ROW_H = 58
+CHIP_GAP = 12
 SERVICE_GAP = 10
 TOP_CARD_H = 88
 SECTION_H = 46
@@ -136,31 +137,7 @@ def _header(body: list[str], report: MonthReport, fonts: FontBook, currency: str
 def _category_strip(
     body: list[str], report: MonthReport, fonts: FontBook, y: float, currency: str
 ) -> float:
-    available = theme.WIDTH - theme.PAD * 2 - PILL_GAP * 2
-    pill_w = available / 3
-
-    for position, category in enumerate(Category):
-        x = theme.PAD + position * (pill_w + PILL_GAP)
-        amount = report.by_category.get(category, ZERO)
-        color = theme.CATEGORY_COLOR[category]
-
-        body.append(svg.rect(x, y, pill_w, PILL_H, rx=20, fill=theme.CARD))
-        body.append(svg.rect(x, y, 4, PILL_H, rx=2, fill=color, opacity=0.9))
-        body.append(icons.category_icon(category, x + 22, y + 21, 26, color, width=2.1))
-        body.append(
-            svg.text(
-                x + 62, y + 36, CATEGORY_TITLE[category].upper(),
-                size=13, weight=700, fill=theme.MUTED, tracking=1.4,
-            )
-        )
-        body.append(
-            svg.text(
-                x + 62, y + 66, money(amount, currency),
-                size=23, weight=700, fill=theme.TEXT if amount else theme.DIM,
-            )
-        )
-
-    return y + PILL_H + 28
+    return blocks.category_strip(body, report.by_category, fonts, y, currency) + 28
 
 
 def _section(
@@ -240,17 +217,21 @@ def _leaderboard_row(
             svg.group(markup, transform=f"translate({svg.num(right - 26 - badge_w)},{svg.num(top + 54)})")
         )
 
-    name_limit = (right - 26 - amount_w - 28) - NAME_X
-    chip = _title_chip(person, fonts)
-    if chip:
-        chip_markup, chip_w = chip
-        name_limit -= chip_w + 12
+    space = (right - 26 - amount_w - 28) - NAME_X
+    chips = [_title_chip(title, fonts) for title in person.titles]
+    # Второе звание рисуем, только если имя при этом влезает целиком:
+    # обрезанное имя хуже, чем одно звание вместо двух
+    name_w = fonts.width(person.name, 25, 700)
+    while len(chips) > 1 and name_w + sum(w + CHIP_GAP for _, w in chips) > space:
+        chips.pop()
+    name_limit = space - sum(w + CHIP_GAP for _, w in chips)
     name = fonts.fit(person.name, 25, max(name_limit, 60), 700)
     body.append(svg.text(NAME_X, top + 36, name, size=25, weight=700, fill=theme.TEXT))
 
-    if chip:
-        chip_x = NAME_X + fonts.width(name, 25, 700) + 12
+    chip_x = NAME_X + fonts.width(name, 25, 700) + CHIP_GAP
+    for chip_markup, chip_w in chips:
         body.append(svg.group(chip_markup, transform=f"translate({svg.num(chip_x)},{svg.num(top + 16)})"))
+        chip_x += chip_w + 8
 
     meta = _person_meta(person)
     if meta:
@@ -349,14 +330,12 @@ def _rank_badge(person: PersonMonth, fonts: FontBook) -> tuple[str, float] | Non
     return "".join(parts), width
 
 
-def _title_chip(person: PersonMonth, fonts: FontBook) -> tuple[str, float] | None:
-    if not person.title:
-        return None
+def _title_chip(title: str, fonts: FontBook) -> tuple[str, float]:
     height = 26
-    text_w = fonts.width(person.title, 13, 700)
+    text_w = fonts.width(title, 13, 700)
     width = text_w + 26
     markup = svg.rect(0, 0, width, height, rx=height / 2, fill=theme.GOLD, opacity=0.14) + svg.text(
-        13, height / 2 + 4.5, person.title, size=13, weight=700, fill=theme.GOLD
+        13, height / 2 + 4.5, title, size=13, weight=700, fill=theme.GOLD
     )
     return markup, width
 

@@ -17,8 +17,8 @@ from decimal import Decimal
 
 # Через столько дней вес отрезка падает вдвое
 HALF_LIFE_DAYS = 90
-# Отрезки быстрее этого — опечатка в одометре, а не езда
-MAX_KM_PER_DAY = 500
+# Быстрее этого машина не едет: Москва–Сочи за сутки — уже предел
+MAX_KM_PER_DAY = 1500
 # После стольких дней без замеров оценка считается протухшей
 STALE_AFTER_DAYS = 60
 # Пока замеров меньше двух, свою оценку построить не из чего
@@ -60,19 +60,49 @@ class Reading:
 
 
 def collect(readings: list[Reading]) -> list[Reading]:
-    """Сортирует по дате и выбрасывает нефизичное: скачки назад и дубли."""
-    ordered = sorted(readings, key=lambda item: item.at)
-    clean: list[Reading] = []
-    for reading in ordered:
-        if reading.km <= 0:
-            continue
-        # Одометр не крутится назад: меньший пробег позже — это опечатка
-        if clean and reading.km < clean[-1].km:
-            continue
-        if clean and reading.km == clean[-1].km:
-            continue
-        clean.append(reading)
-    return clean
+    """Оставляет самую длинную правдоподобную цепочку замеров.
+
+    Опечатка в одометре бывает в обе стороны: «186567» вместо «187567» — это
+    скачок назад, «1200» вместо «75 200» — тоже, а лишняя цифра даёт скачок
+    вперёд на сотни тысяч. Просто выкидывать «всё, что меньше предыдущего»
+    нельзя: если ошибся самый первый замер, он утянет за собой все остальные.
+
+    Поэтому ищем самую длинную цепочку, где пробег строго растёт и машина не
+    едет быстрее MAX_KM_PER_DAY. Всё, что в неё не попало, — опечатки.
+    """
+    ordered = sorted((r for r in readings if r.km > 0), key=lambda item: item.at)
+    if len(ordered) < 2:
+        return ordered
+
+    length = [1] * len(ordered)
+    parent = [-1] * len(ordered)
+    for i, current in enumerate(ordered):
+        for j in range(i):
+            previous = ordered[j]
+            if not _plausible(previous, current):
+                continue
+            # При равенстве длин оставляем более ранний источник цепочки
+            if length[j] + 1 > length[i]:
+                length[i] = length[j] + 1
+                parent[i] = j
+
+    # Самая длинная цепочка, а среди равных — та, что кончается позже
+    end = max(range(len(ordered)), key=lambda k: (length[k], k))
+    chain: list[Reading] = []
+    while end != -1:
+        chain.append(ordered[end])
+        end = parent[end]
+    chain.reverse()
+    return chain
+
+
+def _plausible(previous: Reading, current: Reading) -> bool:
+    gained = current.km - previous.km
+    if gained <= 0:
+        return False
+    days = (current.at - previous.at).total_seconds() / 86400
+    # Минимум сутки: два замера в один день могут разделять и 800 км трассы
+    return gained <= MAX_KM_PER_DAY * max(days, 1.0)
 
 
 def _pace(readings: list[Reading], now: datetime) -> Decimal | None:

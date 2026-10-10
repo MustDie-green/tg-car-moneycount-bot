@@ -4,10 +4,10 @@ from __future__ import annotations
 
 from collections import defaultdict
 from dataclasses import dataclass, field
-from datetime import datetime
+from datetime import datetime, timedelta
 from decimal import Decimal
 
-from . import garage, timeutil
+from . import garage, mileage, timeutil
 from .cost import CostPerKm
 from .db import Repo
 from .formatting import decimal_str, money, plural, with_plural
@@ -30,43 +30,64 @@ class FuelStats:
     fills: int
 
 
+# Окно, по которому считается расход: свежее важнее, но короткий отрезок
+# слишком шумный из-за неполных заправок
+FUEL_WINDOW_DAYS = 180
+MIN_FUEL_DISTANCE = 300
+
+
 def fuel_stats(expenses: list[Expense]) -> FuelStats | None:
-    """Считает расход методом полного бака по последовательным заправкам.
+    """Расход по всем заправкам между первым и последним надёжным замером.
 
-    Между двумя заправками с известным пробегом машина проехала (odo2 - odo1)
-    километров и залила liters2 литров — отсюда и л/100км, и рубли за километр.
-    Отрезки с бредовыми числами выбрасываем.
+    Метод полного бака по соседним заправкам не годится: заливают по 20–40
+    литров, а пробег пишут не всегда. Пропустил пробег на одной заправке — и
+    её литры выпадали, а километры следующего отрезка оставались, отсюда
+    5 л/100 у Макана.
+
+    Поэтому берём две крайние точки с надёжным пробегом и делим на километры
+    между ними все литры, залитые после первой из них, — с пробегом и без.
+    Литры первой заправки не считаются: сколько было в баке до неё, неизвестно.
+    Опечатки в одометре отсекает mileage.collect.
     """
-    with_odo = [e for e in expenses if e.odometer and e.liters]
-    if len(with_odo) < 2:
-        return _price_only(expenses)
+    fills = sorted(
+        (e for e in expenses if e.category == Category.FUEL and e.liters),
+        key=lambda e: e.spent_at,
+    )
+    # Замер помним вместе с позицией заправки: границы окна — это позиции,
+    # а не время, иначе две заправки с одной меткой времени теряются
+    position: dict[int, int] = {}
+    candidates: list[mileage.Reading] = []
+    for index, fill in enumerate(fills):
+        if fill.odometer:
+            reading = mileage.Reading(at=fill.spent_at, km=fill.odometer)
+            position[id(reading)] = index
+            candidates.append(reading)
+    readings = mileage.collect(candidates)
+    if len(readings) < 2:
+        return _price_only(fills)
 
-    total_distance = 0
-    total_liters = ZERO
-    total_cost = ZERO
-    segments = 0
+    last = readings[-1]
+    horizon = last.at - timedelta(days=FUEL_WINDOW_DAYS)
+    recent = [r for r in readings if r.at >= horizon]
+    first = recent[0] if len(recent) >= 2 else readings[0]
 
-    for previous, current in zip(with_odo, with_odo[1:]):
-        distance = (current.odometer or 0) - (previous.odometer or 0)
-        if not 30 <= distance <= 3000:
-            continue
-        consumption = (current.liters or ZERO) / Decimal(distance) * 100
-        if not Decimal(2) <= consumption <= Decimal(35):
-            continue
-        total_distance += distance
-        total_liters += current.liters or ZERO
-        total_cost += current.amount
-        segments += 1
+    distance = last.km - first.km
+    inside = fills[position[id(first)] + 1 : position[id(last)] + 1]
+    liters = sum((e.liters or ZERO for e in inside), ZERO)
+    cost = sum((e.amount for e in inside), ZERO)
+    if distance < MIN_FUEL_DISTANCE or liters <= 0:
+        return _price_only(fills)
 
-    if not segments or not total_distance:
-        return _price_only(expenses)
+    per_100 = liters / Decimal(distance) * 100
+    if not Decimal(2) <= per_100 <= Decimal(35):
+        return _price_only(fills)
 
     return FuelStats(
-        liters_per_100=(total_liters / Decimal(total_distance) * 100).quantize(Decimal("0.1")),
-        rub_per_km=(total_cost / Decimal(total_distance)).quantize(Decimal("0.01")),
-        price_per_liter=_avg_price(expenses),
-        distance=total_distance,
-        fills=segments + 1,
+        liters_per_100=per_100.quantize(Decimal("0.1")),
+        rub_per_km=(cost / Decimal(distance)).quantize(Decimal("0.01")),
+        price_per_liter=_avg_price(fills),
+        distance=distance,
+        fills=len(inside) + 1,
     )
 
 
@@ -113,7 +134,7 @@ async def build_month_report(
     prev_start, prev_end = timeutil.month_range(prev_year, prev_month, tz_name)
     prev_rows = await repo.totals_by_person(chat_id, prev_start, prev_end)
 
-    people = _people_from_expenses(expenses)
+    people = _people_from_expenses(expenses, tz_name)
     _apply_ranks(people)
     _apply_previous_ranks(people, prev_rows)
 
@@ -124,8 +145,6 @@ async def build_month_report(
             person.avatar = avatars.get(person.tg_id)
 
     top_expenses = sorted(expenses, key=lambda e: e.amount, reverse=True)[:3]
-    black_swan = _black_swan(top_expenses, expenses)
-    assign_titles(people, black_swan)
 
     by_category: dict[Category, Decimal] = defaultdict(lambda: ZERO)
     for expense in expenses:
@@ -147,6 +166,13 @@ async def build_month_report(
         if found.cost:
             person.rub_per_km = found.cost.total
             person.cost_low_data = found.cost.low_data
+
+    for person in people:
+        fuel = fuel_stats(await repo.fuel_series(chat_id, person.tg_id))
+        person.liters_per_100 = fuel.liters_per_100 if fuel else None
+
+    # Звания раздаются последними: им нужны и пробег, и расход
+    assign_titles(people, _black_swan(top_expenses, expenses))
 
     names_by_id = {p.tg_id: p.name for p in people}
     service_soon = [
@@ -186,7 +212,13 @@ async def build_month_report(
     )
 
 
-def _people_from_expenses(expenses: list[Expense]) -> list[PersonMonth]:
+# Траты с полуночи до этого часа по времени чата — для «Ночного гонщика»
+NIGHT_UNTIL_HOUR = 5
+
+
+def _people_from_expenses(
+    expenses: list[Expense], tz_name: str | None = None
+) -> list[PersonMonth]:
     grouped: dict[int, PersonMonth] = {}
     for expense in expenses:
         person = grouped.get(expense.author_id)
@@ -204,6 +236,10 @@ def _people_from_expenses(expenses: list[Expense]) -> list[PersonMonth]:
         person.by_category[expense.category] = (
             person.by_category.get(expense.category, ZERO) + expense.amount
         )
+        if expense.category == Category.FUEL:
+            person.fuel_count += 1
+        if tz_name and spent_at_of(expense, tz_name).hour < NIGHT_UNTIL_HOUR:
+            person.night_count += 1
     return list(grouped.values())
 
 
@@ -334,7 +370,7 @@ def _fact_fuel_share(ctx: _FactContext) -> str | None:
 def _fact_washes(ctx: _FactContext) -> str | None:
     """Цену мойки берём из самого чата — у всех она своя."""
     washes = [
-        e for e in ctx.expenses if e.category == Category.OTHER and e.amount <= 2000
+        e for e in ctx.expenses if e.category == Category.CARE and e.amount <= 2000
     ]
     if not washes:
         return None

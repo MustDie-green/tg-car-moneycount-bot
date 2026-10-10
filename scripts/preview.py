@@ -34,7 +34,7 @@ def person(tg_id, name, fuel, service, other, count, prev_rank, car=None):
     if service:
         by_category[Category.SERVICE] = Decimal(service)
     if other:
-        by_category[Category.OTHER] = Decimal(other)
+        by_category[Category.CARE] = Decimal(other)
     car_title, odometer, month_km, per_km, low_data = car or (
         None, None, None, None, False
     )
@@ -86,7 +86,7 @@ def month_report() -> MonthReport:
     top = [
         expense(1, "Антон", 48000, Category.SERVICE, "замена сцепления и выжимного", 14),
         expense(3, "Сергей Кузнецов", 12000, Category.SERVICE, "новая резина на лето, четыре колеса", 6),
-        expense(2, "Валера", 6800, Category.OTHER, "детейлинг и химчистка салона", 21),
+        expense(2, "Валера", 6800, Category.CARE, "детейлинг и химчистка салона", 21),
     ]
     assign_titles(people, black_swan_id=1)
 
@@ -131,7 +131,7 @@ def personal_report() -> PersonalReport:
         by_category={
             Category.FUEL: Decimal(12400),
             Category.SERVICE: Decimal(48000),
-            Category.OTHER: Decimal(3200),
+            Category.CARE: Decimal(3200),
         },
         count=11,
         rank=1,

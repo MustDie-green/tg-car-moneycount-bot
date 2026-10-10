@@ -46,6 +46,11 @@ class Morph:
     def lemma(self, word: str) -> str:
         return normalize(self._parse_first(word).normal_form)
 
+    @lru_cache(maxsize=8192)
+    def is_known(self, word: str) -> bool:
+        """Есть ли слово в словаре русского языка — то есть не опечатка."""
+        return bool(self.analyzer.word_is_known(word))
+
     def pos(self, word: str) -> str | None:
         tag = self._parse_first(word).tag.POS
         return str(tag) if tag else None
@@ -143,9 +148,11 @@ class KeywordIndex:
                 if token.startswith(prefix):
                     return KeywordHit(category, token, Confidence.HIGH)
 
-        # 4. Опечатки
-        for lemma in analysis.lemmas:
-            if len(lemma) < 5:
+        # 4. Опечатки. Только для слов, которых нет в словаре русского языка:
+        # «акумулятор» — опечатка, а «делать», «капитан», «номер» — обычные
+        # слова, и похожесть на «деталь» или «капиталку» ничего не значит
+        for token, lemma in zip(analysis.tokens, analysis.lemmas):
+            if len(lemma) < 5 or morph.is_known(token):
                 continue
             best = fuzz_process.extractOne(
                 lemma,

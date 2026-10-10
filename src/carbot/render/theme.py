@@ -28,7 +28,9 @@ BRONZE = "#D08B4F"
 CATEGORY_COLOR: dict[Category, str] = {
     Category.FUEL: "#4C9AFF",
     Category.SERVICE: "#FF7A45",
-    Category.OTHER: "#35D0A5",
+    Category.FINES: "#F0506E",
+    Category.CARE: "#35D0A5",
+    Category.STATE: "#C77DFF",
 }
 
 UP = "#35D07F"

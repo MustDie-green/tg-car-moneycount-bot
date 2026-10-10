@@ -10,6 +10,7 @@ from apscheduler.triggers.cron import CronTrigger
 from apscheduler.triggers.interval import IntervalTrigger
 
 from . import garage, service, timeutil
+from .handlers import service_flow
 from .handlers.commands import build_month_image, month_caption
 from .services import Context
 
@@ -89,20 +90,18 @@ async def _notify(ctx: Context, chat_id: int, owner_id: int, item, due_list, now
     for due in due_list:
         mark = "❗️" if due.overdue else "·"
         lines.append(f"{mark} {due.plan.title} — {due.reason()}")
+    lines += ["", "Уже поменял? Отметь галочкой — пересчитаю следующую замену."]
 
-    if item.mileage and item.mileage.is_estimate:
-        lines += [
-            "",
-            f"<i>Пробег прикинут по темпу езды — точный был "
-            f"{item.mileage.known_km:,} км. Напиши «пробег 123456», "
-            f"и я пересчитаю.</i>".replace(",", " "),
-        ]
-
-    try:
-        await ctx.bot.send_message(owner_id, "\n".join(lines))
-    except Exception as error:  # noqa: BLE001
-        # Личка не открыта — ждём, пока человек сам напишет боту
-        log.debug("не смог написать %s в личку: %s", owner_id, error)
+    # Под напоминанием сразу вопрос «Отметить в ТО?»: заменил — отметил тут же
+    sent = await service_flow.offer_in_dm(
+        ctx,
+        group_id=chat_id,
+        owner_id=owner_id,
+        offered=[due.plan.kind for due in due_list],
+        selected=[],
+        lead="\n".join(lines),
+    )
+    if not sent:
         return
 
     for due in due_list:
@@ -146,3 +145,4 @@ async def cleanup_pendings(ctx: Context) -> None:
         # Вопрос без ответа — тоже сигнал: скорее всего бот спросил зря
         await ctx.repo.log_answer(chat_id, message_id, "timeout")
         await ctx.repo.drop_pending(chat_id, message_id)
+    await ctx.repo.drop_expired_service_asks()

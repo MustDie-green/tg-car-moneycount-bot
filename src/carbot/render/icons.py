@@ -27,13 +27,34 @@ _SERVICE = (
     "a6 6 0 0 1 7.94-7.94l-3.76 3.76z",
 )
 
+# Предупреждающий треугольник
+_FINES = (
+    "M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86"
+    "a2 2 0 0 0-3.42 0z",
+    "M12 9v4",
+    "M12 17h.01",
+)
+
 # Капля
-_OTHER = ("M12 2.7l5.66 5.65a8 8 0 1 1-11.31 0z",)
+_CARE = ("M12 2.7l5.66 5.65a8 8 0 1 1-11.31 0z",)
+
+# Здание с колоннами
+_STATE = (
+    "M3 21h18",
+    "M4 9.5h16",
+    "M4 8l8-5 8 5",
+    "M6.5 12v6",
+    "M10.5 12v6",
+    "M13.5 12v6",
+    "M17.5 12v6",
+)
 
 _PATHS: dict[Category, tuple[str, ...]] = {
     Category.FUEL: _FUEL,
     Category.SERVICE: _SERVICE,
-    Category.OTHER: _OTHER,
+    Category.FINES: _FINES,
+    Category.CARE: _CARE,
+    Category.STATE: _STATE,
 }
 
 

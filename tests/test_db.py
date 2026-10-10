@@ -58,12 +58,12 @@ async def test_multiple_detections_from_one_message(repo):
         message_id=43,
         detections=[
             detection(1000, Category.FUEL, "бенз"),
-            detection(500, Category.OTHER, "мойка"),
+            detection(500, Category.CARE, "мойка"),
         ],
         spent_at=now,
     )
     rows = await repo.expenses_by_message(CHAT, 43)
-    assert {r.category for r in rows} == {Category.FUEL, Category.OTHER}
+    assert {r.category for r in rows} == {Category.FUEL, Category.CARE}
 
 
 async def test_totals_by_person(repo):
@@ -72,7 +72,7 @@ async def test_totals_by_person(repo):
         (ANTON, "Антон", 1000, Category.FUEL, 1),
         (ANTON, "Антон", 2000, Category.SERVICE, 2),
         (ANTON, "Антон", 500, Category.FUEL, 3),
-        (VALERA, "Валера", 700, Category.OTHER, 4),
+        (VALERA, "Валера", 700, Category.CARE, 4),
     ):
         await repo.save_expenses(
             chat_id=CHAT,
@@ -88,7 +88,7 @@ async def test_totals_by_person(repo):
     assert by_key[(ANTON, Category.FUEL)]["total"] == Decimal(1500)
     assert by_key[(ANTON, Category.FUEL)]["cnt"] == 2
     assert by_key[(ANTON, Category.SERVICE)]["total"] == Decimal(2000)
-    assert by_key[(VALERA, Category.OTHER)]["total"] == Decimal(700)
+    assert by_key[(VALERA, Category.CARE)]["total"] == Decimal(700)
 
 
 async def test_period_filter_excludes_other_months(repo):
@@ -117,7 +117,7 @@ async def test_undo_removes_whole_message(repo):
     now = datetime.now(timezone.utc)
     await repo.save_expenses(
         chat_id=CHAT, author_id=ANTON, author_name="Антон", message_id=7,
-        detections=[detection(1000, Category.FUEL), detection(500, Category.OTHER)],
+        detections=[detection(1000, Category.FUEL), detection(500, Category.CARE)],
         spent_at=now,
     )
     last = await repo.last_expenses(CHAT, ANTON)
@@ -139,7 +139,7 @@ async def test_lexicon_learns_after_threshold(repo):
 
 async def test_lexicon_negative_votes_kill_the_word(repo):
     for _ in range(2):
-        await repo.vote_words(CHAT, ["шаурма"], Category.OTHER, positive=True)
+        await repo.vote_words(CHAT, ["шаурма"], Category.CARE, positive=True)
     for _ in range(3):
         await repo.vote_words(CHAT, ["шаурма"], None, positive=False)
     assert await repo.learned_words(CHAT, threshold=2) == {}

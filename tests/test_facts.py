@@ -66,7 +66,7 @@ def test_distance_falls_back_without_fuel_data():
 
 
 def test_distance_stays_quiet_on_small_sums():
-    assert reporting._fact_distance(context([expense(3, 300, Category.OTHER)])) is None
+    assert reporting._fact_distance(context([expense(3, 300, Category.CARE)])) is None
 
 
 def test_route_hint_matches_only_when_it_lands_well():
@@ -115,7 +115,7 @@ def test_quiet_days_counts_only_elapsed_days():
 def test_day_facts_use_chat_timezone():
     """22:00 UTC — это уже следующий день по Москве."""
     late = expense(4, 5_000, Category.SERVICE, hour=22)
-    quiet = [expense(day, 100, Category.OTHER) for day in (1, 2, 3)]
+    quiet = [expense(day, 100, Category.CARE) for day in (1, 2, 3)]
     ctx = context([late, *quiet])
     assert ctx.local_day(late.spent_at) == 5
     assert "5-е" in reporting._fact_worst_day(ctx)
@@ -160,7 +160,7 @@ def test_fun_fact_is_deterministic_and_varies_by_month():
     expenses = [
         expense(2, 2_500, Category.FUEL, liters=42, odometer=120_000),
         expense(9, 8_000, Category.SERVICE),
-        expense(16, 500, Category.OTHER),
+        expense(16, 500, Category.CARE),
     ]
     people = [
         PersonMonth(tg_id=111, name="Валера", total=Decimal(11_000),

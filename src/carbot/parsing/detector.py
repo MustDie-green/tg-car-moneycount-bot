@@ -14,7 +14,7 @@ from decimal import Decimal
 
 from ..models import Category, Confidence, Detection, ParseResult
 from .amount import AmountMatch, extract_liters, extract_odometer, find_amounts
-from .morph import analyze, index
+from .morph import KeywordHit, analyze, index
 
 _TRIM = " \t\n\r,.;:!?-—–+«»\"'()[]и"
 _MAX_NOTE = 64
@@ -27,6 +27,27 @@ EXPLICIT_RE = re.compile(
     r"\s*[:\-—]?\s*",
     re.IGNORECASE,
 )
+
+
+# «ТО» заглавными — техобслуживание. Строчное «то» в переписке почти всегда
+# «что-то» или «то есть», поэтому из словаря оно убрано, а здесь смотрим на
+# исходный регистр, которого морфология уже не видит.
+_SERVICE_TO = re.compile(r"(?<![А-ЯЁа-яёA-Za-z])ТО(?![А-ЯЁа-яёA-Za-z])")
+
+
+def _uppercase_to(segment: str) -> KeywordHit | None:
+    if not _SERVICE_TO.search(segment):
+        return None
+    # Сообщение капсом целиком — это крик, а не аббревиатура. Сам «ТО» в
+    # подсчёт не берём: «ТО 12000» без других букв капсом не считается
+    rest = [ch for ch in _SERVICE_TO.sub("", segment) if ch.isalpha()]
+    if len(rest) >= 4 and sum(ch.isupper() for ch in rest) / len(rest) > 0.6:
+        return None
+    return KeywordHit(Category.SERVICE, "ТО", Confidence.HIGH)
+
+
+def _match(segment: str, learned: dict[str, Category] | None) -> KeywordHit | None:
+    return index.match(analyze(segment), learned) or _uppercase_to(segment)
 
 
 def _segments(text: str, amounts: list[AmountMatch]) -> list[str]:
@@ -94,9 +115,9 @@ def parse_message(
     any_static_hit = False
 
     for amount, segment in zip(amounts, segments):
-        hit = index.match(analyze(segment), learned)
+        hit = _match(segment, learned)
         if hit is None and len(amounts) == 1:
-            hit = index.match(whole, learned)
+            hit = _match(body, learned)
 
         # Ключевое слово обязательно. Без него молчим — кроме явной формы,
         # где человек уже сказал, что это про машину.

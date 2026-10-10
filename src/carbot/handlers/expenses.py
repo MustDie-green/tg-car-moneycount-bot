@@ -25,6 +25,7 @@ from ..models import CATEGORY_EMOJI, CATEGORY_TITLE, Category, Detection, ParseR
 from ..parsing import parse_message
 from ..parsing.amount import extract_odometer
 from ..services import Context
+from . import service_flow
 
 log = logging.getLogger(__name__)
 router = Router(name="expenses")
@@ -32,11 +33,9 @@ router = Router(name="expenses")
 CALLBACK_PREFIX = "e"
 ACTION_YES = "yes"
 ACTION_NO = "no"
-CATEGORY_ACTIONS = {
-    "fuel": Category.FUEL,
-    "service": Category.SERVICE,
-    "other": Category.OTHER,
-}
+CATEGORY_ACTIONS = {category.value: category for category in Category}
+# Кнопка из старых вопросов, заданных до разделения «остального»
+CATEGORY_ACTIONS["other"] = Category.CARE
 
 SALUTE = "🫡"
 # Реакция на голый замер пробега — отличается от подтверждённой траты
@@ -58,6 +57,10 @@ async def on_message(message: Message, ctx: Context) -> None:
     if message.from_user is None or message.from_user.is_bot:
         return
     if not ctx.allows(message.chat.id):
+        return
+    # Пересланное — чужие слова: уведомления АЗС, посты каналов, цитаты.
+    # Трату человек пишет сам.
+    if message.forward_origin is not None or message.is_automatic_forward:
         return
 
     text = message.text or message.caption or ""
@@ -153,6 +156,12 @@ async def _save_now(message: Message, ctx: Context, result: ParseResult) -> None
     total = sum((d.amount for d in result.detections), Decimal(0))
     if not await _react(ctx, message.chat.id, message.message_id, total):
         await message.reply(f"{SALUTE} {_summary(result.detections, ctx.settings.currency)}")
+    await service_flow.offer_as_reply(
+        ctx,
+        message,
+        text=" ".join(d.note for d in result.detections),
+        odometer=next((d.odometer for d in result.detections if d.odometer), None),
+    )
     log.info(
         "трата записана явной формой: чат=%s автор=%s %s",
         message.chat.id, message.from_user.id,
@@ -204,20 +213,13 @@ def build_question(
         # остаётся только уточнить категорию
         lead = "Куда записать?" if result.explicit else "На тачку?"
         text = f"{lead} {money(result.total, currency)}"
-        rows = [
-            [
-                _button(CATEGORY_EMOJI[category] + " " + CATEGORY_TITLE[category], message_id, action)
-                for action, category in list(CATEGORY_ACTIONS.items())[:2]
-            ],
-            [
-                _button(
-                    CATEGORY_EMOJI[Category.OTHER] + " " + CATEGORY_TITLE[Category.OTHER],
-                    message_id,
-                    "other",
-                ),
-                _button("✖️ Не на тачку", message_id, ACTION_NO),
-            ],
+        buttons = [
+            _button(f"{CATEGORY_EMOJI[category]} {CATEGORY_TITLE[category]}", message_id, category.value)
+            for category in Category
         ]
+        buttons.append(_button("✖️ Не на тачку", message_id, ACTION_NO))
+        # По две кнопки в ряд: шесть штук в одну строку не влезают на телефоне
+        rows = [buttons[i : i + 2] for i in range(0, len(buttons), 2)]
         return text, InlineKeyboardMarkup(inline_keyboard=rows)
 
     parts = [
@@ -288,7 +290,7 @@ async def on_answer(callback: CallbackQuery, ctx: Context) -> None:
 
     for detection in detections:
         if detection.category is None:
-            detection.category = chosen or Category.OTHER
+            detection.category = chosen or Category.CARE
 
     saved = await ctx.repo.save_expenses(
         chat_id=chat_id,
@@ -310,7 +312,21 @@ async def on_answer(callback: CallbackQuery, ctx: Context) -> None:
     reacted = await _react(ctx, chat_id, message_id, total)
     summary = _summary(detections, ctx.settings.currency)
 
-    if reacted:
+    # Масло, фильтры, колодки — вопрос не исчезает, а превращается в
+    # «Отметить в ТО?», чтобы замена попала в обслуживание без похода в личку
+    turned = await service_flow.offer_in_place(
+        ctx,
+        chat_id=chat_id,
+        message_id=pending["question_id"],
+        owner_id=pending["author_id"],
+        text=" ".join(d.note for d in detections),
+        odometer=next((d.odometer for d in detections if d.odometer), None),
+        at=pending["spent_at"],
+    )
+
+    if turned:
+        pass
+    elif reacted:
         await _delete(ctx, chat_id, pending["question_id"])
     else:
         # Без права на реакции подтверждение должно быть хоть как-то видно

@@ -64,9 +64,14 @@ def test_amount_rejected(text):
         ("бенз 1000р", Category.FUEL),
         ("заправился на 2000", Category.FUEL),
         ("залил 92го на 3000р", Category.FUEL),
-        ("мойка 500", Category.OTHER),
-        ("помыл тачку 700", Category.OTHER),
-        ("страховка 12000", Category.OTHER),
+        ("мойка 500", Category.CARE),
+        ("помыл тачку 700", Category.CARE),
+        ("страховка 12000", Category.STATE),
+        ("штраф 500", Category.FINES),
+        ("парковка 300", Category.STATE),
+        ("платные дороги 600", Category.STATE),
+        ("абонемент 4775", Category.STATE),
+        ("омывайка 399", Category.CARE),
         ("запчасти 5000", Category.SERVICE),
         ("замена масла 4500", Category.SERVICE),
         ("колодки поменял 6000", Category.SERVICE),
@@ -98,7 +103,7 @@ def test_multiple_expenses_in_one_message():
     result = parse_message("бенз 1000 и мойка 500")
     assert len(result.detections) == 2
     assert result.detections[0].category == Category.FUEL
-    assert result.detections[1].category == Category.OTHER
+    assert result.detections[1].category == Category.CARE
     assert result.total == Decimal(1500)
 
 

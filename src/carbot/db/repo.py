@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 from dataclasses import asdict
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from typing import Any
 
@@ -91,7 +91,7 @@ class Repo:
                 "author_name": author_name,
                 "message_id": message_id,
                 "amount": detection.amount,
-                "category": str(detection.category or Category.OTHER),
+                "category": str(detection.category or Category.CARE),
                 "note": detection.note,
                 "liters": detection.liters,
                 "odometer": detection.odometer,
@@ -194,10 +194,14 @@ class Repo:
         return rows[0]["spent_at"] if rows else None
 
     async def fuel_series(self, chat_id: int, author_id: int) -> list[Expense]:
-        """Заправки с указанным пробегом — из них считается расход."""
+        """Все заправки человека по времени — и с пробегом, и без.
+
+        Заправки без пробега нужны расходу не меньше остальных: их литры
+        тоже сожжены на километрах между замерами.
+        """
         rows = await self.db.query(
             "SELECT * FROM expense WHERE chat_id = $chat AND author_id = $author "
-            "AND category = 'fuel' AND odometer != NONE ORDER BY odometer ASC",
+            "AND category = 'fuel' ORDER BY spent_at ASC",
             {"chat": chat_id, "author": author_id},
         )
         return [_row_to_expense(row) for row in rows or []]
@@ -452,6 +456,119 @@ class Repo:
                 "nat": next_at,
             },
         )
+
+    async def mark_serviced(
+        self,
+        *,
+        chat_id: int,
+        owner_id: int,
+        car: RecordID,
+        car_slug: str,
+        car_title: str,
+        kind: str,
+        km: int | None,
+        at: datetime,
+        interval_km: int | None,
+        interval_days: int | None,
+    ) -> None:
+        """Замена состоялась: новая точка отсчёта, старый план и напоминание — в прошлое.
+
+        Именно забытый план «следующая на …» делал масло «просроченным»
+        сразу после замены: явный план считался важнее последней замены.
+        """
+        await self.db.query(
+            "UPSERT service:[$chat, $owner, $slug, $kind] SET chat_id = $chat, "
+            "owner_id = $owner, car = $car, car_slug = $slug, car_title = $title, "
+            "kind = $kind, interval_km = $ikm, interval_days = $idays, "
+            "last_km = $km, last_at = $at, next_km = NONE, next_at = NONE, "
+            "reminded_at = NONE, updated_at = time::now()",
+            {
+                "chat": chat_id,
+                "owner": owner_id,
+                "car": car,
+                "slug": car_slug,
+                "title": car_title,
+                "kind": kind,
+                "ikm": interval_km,
+                "idays": interval_days,
+                "km": km,
+                "at": at,
+            },
+        )
+
+    async def clear_reminder(
+        self, chat_id: int, owner_id: int, car_slug: str, kind: str
+    ) -> None:
+        await self.db.query(
+            "UPDATE service:[$chat, $owner, $slug, $kind] SET reminded_at = NONE",
+            {"chat": chat_id, "owner": owner_id, "slug": car_slug, "kind": kind},
+        )
+
+    # --- Вопрос «Отметить в ТО?» -------------------------------------------
+
+    async def save_service_ask(
+        self,
+        *,
+        msg_chat: int,
+        message_id: int,
+        group_id: int,
+        owner_id: int,
+        car: RecordID,
+        car_slug: str,
+        car_title: str,
+        offered: list[str],
+        selected: list[str],
+        km: int | None,
+        km_estimated: bool,
+        at: datetime,
+        ttl_days: int = 3,
+    ) -> None:
+        await self.db.query(
+            "UPSERT service_ask:[$chat, $msg] SET msg_chat = $chat, message_id = $msg, "
+            "group_id = $group, owner_id = $owner, car = $car, car_slug = $slug, "
+            "car_title = $title, offered = $offered, selected = $selected, km = $km, "
+            "km_estimated = $estimated, awaiting_km = false, at = $at, "
+            "expires_at = $expires",
+            {
+                "chat": msg_chat,
+                "msg": message_id,
+                "group": group_id,
+                "owner": owner_id,
+                "car": car,
+                "slug": car_slug,
+                "title": car_title,
+                "offered": offered,
+                "selected": selected,
+                "km": km,
+                "estimated": km_estimated,
+                "at": at,
+                "expires": datetime.now(timezone.utc) + timedelta(days=ttl_days),
+            },
+        )
+
+    async def get_service_ask(self, msg_chat: int, message_id: int) -> dict[str, Any] | None:
+        rows = await self.db.query(
+            "SELECT * FROM service_ask:[$chat, $msg] WHERE expires_at > time::now()",
+            {"chat": msg_chat, "msg": message_id},
+        )
+        return rows[0] if rows else None
+
+    async def update_service_ask(
+        self, msg_chat: int, message_id: int, **fields: Any
+    ) -> None:
+        assignments = ", ".join(f"{name} = ${name}" for name in fields)
+        await self.db.query(
+            f"UPDATE service_ask:[$chat, $msg] SET {assignments}",
+            {"chat": msg_chat, "msg": message_id, **fields},
+        )
+
+    async def drop_service_ask(self, msg_chat: int, message_id: int) -> None:
+        await self.db.query(
+            "DELETE service_ask:[$chat, $msg]", {"chat": msg_chat, "msg": message_id}
+        )
+
+    async def drop_expired_service_asks(self) -> None:
+        await self.db.query("DELETE service_ask WHERE expires_at <= time::now()")
 
     async def drop_service(
         self, chat_id: int, owner_id: int, car_slug: str, kind: str
