@@ -25,7 +25,7 @@ from aiogram.types import (
     Message,
 )
 
-from .. import garage, service
+from .. import garage, mileage, service
 from ..services import Context
 
 log = logging.getLogger(__name__)
@@ -234,19 +234,34 @@ async def on_km_reply(message: Message, ctx: Context, ask: dict[str, Any]) -> No
         return
 
     question_id = message.reply_to_message.message_id
-    ask.update(km=km, km_estimated=False, awaiting_km=False)
+    at = await _moment_of(ctx, ask, km)
+    ask.update(km=km, km_estimated=False, awaiting_km=False, at=at)
     await ctx.repo.update_service_ask(
-        message.chat.id, question_id, km=km, km_estimated=False, awaiting_km=False
-    )
-    # Названный руками пробег — это настоящий замер, он уточнит и оценку темпа
-    await ctx.repo.add_odometer(
-        chat_id=ask["group_id"],
-        owner_id=ask["owner_id"],
-        km=km,
-        at=ask["at"],
-        car=ask["car"],
+        message.chat.id, question_id, km=km, km_estimated=False, awaiting_km=False, at=at
     )
     await _redraw(ctx, message.chat.id, question_id, ask)
+
+
+async def _moment_of(ctx: Context, ask: dict[str, Any], km: int) -> datetime:
+    """Когда была замена на этом пробеге — и не замер ли это заодно.
+
+    Под тратой в чате пробег назван на момент траты — это настоящий замер,
+    он уточнит и оценку темпа. В личке «заменил на 187 500» часто говорят
+    задним числом, уже на 188 400: тогда это не текущий одометр, а прошлое,
+    и дату замены восстанавливаем по замерам вокруг этого пробега.
+    """
+    group_id, owner_id = ask["group_id"], ask["owner_id"]
+    raw = await ctx.repo.odometer_readings(group_id, owner_id)
+    readings = [mileage.Reading(at=moment, km=value) for moment, value in raw]
+    latest = mileage.collect(readings)[-1].km if readings else 0
+    in_chat = ask.get("msg_chat", group_id) == group_id
+
+    if in_chat or km >= latest:
+        await ctx.repo.add_odometer(
+            chat_id=group_id, owner_id=owner_id, km=km, at=ask["at"], car=ask["car"]
+        )
+        return ask["at"]
+    return mileage.when(readings, km) or ask["at"]
 
 
 # --- Кухня -------------------------------------------------------------------

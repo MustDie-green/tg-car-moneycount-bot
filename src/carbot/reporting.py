@@ -9,6 +9,7 @@ from decimal import Decimal
 
 from . import garage, mileage, timeutil
 from .cost import CostPerKm
+from .forecast import month_forecast, year_pace
 from .db import Repo
 from .formatting import decimal_str, money, plural, with_plural
 from .models import Category, Expense, MonthReport, PersonMonth, ServiceHint
@@ -28,6 +29,8 @@ class FuelStats:
     price_per_liter: Decimal | None
     distance: int
     fills: int
+    # Сколько литров восстановлено по сумме: «Бенз 5994» без литров
+    estimated_liters: Decimal = ZERO
 
 
 # Окно, по которому считается расход: свежее важнее, но короткий отрезок
@@ -48,11 +51,16 @@ def fuel_stats(expenses: list[Expense]) -> FuelStats | None:
     между ними все литры, залитые после первой из них, — с пробегом и без.
     Литры первой заправки не считаются: сколько было в баке до неё, неизвестно.
     Опечатки в одометре отсекает mileage.collect.
+
+    Заправка, записанная одной суммой («Бенз 5994»), тоже бензин в баке:
+    её литры восстанавливаются по собственной цене литра человека. Без этого
+    у Макана пропадали 90 литров из 266, и расход выходил 9,7 вместо 14,7.
     """
     fills = sorted(
-        (e for e in expenses if e.category == Category.FUEL and e.liters),
+        (e for e in expenses if e.category == Category.FUEL),
         key=lambda e: e.spent_at,
     )
+    price = _avg_price(fills)
     # Замер помним вместе с позицией заправки: границы окна — это позиции,
     # а не время, иначе две заправки с одной меткой времени теряются
     position: dict[int, int] = {}
@@ -73,7 +81,10 @@ def fuel_stats(expenses: list[Expense]) -> FuelStats | None:
 
     distance = last.km - first.km
     inside = fills[position[id(first)] + 1 : position[id(last)] + 1]
-    liters = sum((e.liters or ZERO for e in inside), ZERO)
+    estimated = sum(
+        (e.amount / price for e in inside if not e.liters and price), ZERO
+    )
+    liters = sum((e.liters or ZERO for e in inside), ZERO) + estimated
     cost = sum((e.amount for e in inside), ZERO)
     if distance < MIN_FUEL_DISTANCE or liters <= 0:
         return _price_only(fills)
@@ -85,9 +96,10 @@ def fuel_stats(expenses: list[Expense]) -> FuelStats | None:
     return FuelStats(
         liters_per_100=per_100.quantize(Decimal("0.1")),
         rub_per_km=(cost / Decimal(distance)).quantize(Decimal("0.01")),
-        price_per_liter=_avg_price(fills),
+        price_per_liter=price,
         distance=distance,
         fills=len(inside) + 1,
+        estimated_liters=estimated.quantize(Decimal("0.1")),
     )
 
 
@@ -488,7 +500,9 @@ def _fact_per_day(ctx: _FactContext) -> str | None:
 def _fact_year_pace(ctx: _FactContext) -> str | None:
     if ctx.days <= 0 or ctx.total <= 0:
         return None
-    return f"Таким темпом за год набежит {money(ctx.total / ctx.days * 365)}"
+    # Подрамник раз в год не повторяется каждый месяц: разовое — один раз
+    pace = year_pace(ctx.expenses, ctx.days)
+    return f"Таким темпом за год набежит {money(pace)}"
 
 
 def _fact_quiet_days(ctx: _FactContext) -> str | None:
@@ -638,9 +652,8 @@ async def build_personal_report(
         )
         history.append((hist_year, hist_month, bucket))
 
-    elapsed = timeutil.days_elapsed(year, month, tz_name)
-    in_month = timeutil.days_in_month(year, month)
-    forecast = (total / elapsed * in_month).quantize(Decimal("1")) if elapsed else total
+    # Крупная разовая трата не размножается на остаток месяца — см. forecast.py
+    forecast = month_forecast(mine, year, month, tz_name).total
 
     last_at = await repo.last_expense_at(chat_id, tg_id)
     days_since = None

@@ -254,6 +254,39 @@ async def test_reminder_comes_with_replaced_buttons(harness):
     assert plan["last_km"] > 187_000 and plan["reminded_at"] is None
 
 
+async def test_dm_past_replacement_is_not_an_odometer_reading(harness):
+    """«Заменил на 186 500» в личке — это прошлое, а не текущий одометр."""
+    feed, bot, ctx, car = harness
+    from carbot.handlers import service_flow
+
+    await service_flow.offer_in_dm(
+        ctx, group_id=GROUP, owner_id=VALERA, offered=["oil_engine"], selected=["oil_engine"]
+    )
+    ask_id = bot._next_id
+    reply = Message(
+        message_id=900,
+        date=datetime.now(timezone.utc),
+        chat=Chat(id=VALERA, type="private"),
+        from_user=User(id=VALERA, is_bot=False, first_name="Валера"),
+        text="186500",
+        reply_to_message=Message(
+            message_id=ask_id, date=datetime.now(timezone.utc),
+            chat=Chat(id=VALERA, type="private"),
+            from_user=User(id=1, is_bot=True, first_name="bot"), text="вопрос",
+        ),
+    )
+    await feed({"message": reply})
+    await feed({"callback_query": press("sa:ok", message_id=ask_id, chat_id=VALERA)})
+
+    readings = [km for _, km in await ctx.repo.odometer_readings(GROUP, VALERA)]
+    assert 186_500 not in readings, "прошлый пробег не должен стать текущим замером"
+    plan = await oil_plan(ctx)
+    assert plan["last_km"] == 186_500
+    # Дата восстановлена по замерам: 186 500 было примерно 20 дней назад
+    days = (datetime.now(timezone.utc) - plan["last_at"]).days
+    assert 15 <= days <= 25
+
+
 # --- Миграция «остального» ---------------------------------------------------
 
 

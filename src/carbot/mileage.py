@@ -205,3 +205,17 @@ def window(readings: list[Reading]) -> tuple[Reading, Reading] | None:
     if len(clean) < 2:
         return None
     return clean[0], clean[-1]
+
+
+def when(readings: list[Reading], km: int) -> datetime | None:
+    """Когда машина проезжала этот пробег — по соседним замерам.
+
+    Нужно для «заменил масло на 187 500», сказанного уже на 188 400: замена
+    была в прошлом, и дату её надо восстановить, а не ставить сегодняшнюю.
+    """
+    chain = collect(readings)
+    for before, after in zip(chain, chain[1:]):
+        if before.km <= km <= after.km:
+            share = (km - before.km) / (after.km - before.km)
+            return before.at + (after.at - before.at) * share
+    return None

@@ -238,3 +238,12 @@ def test_parse_interval_km():
     assert service.parse_interval_km("7.5к") == 7_500
     assert service.parse_interval_km("абв") is None
     assert service.parse_interval_km("5") is None  # слишком мало для интервала
+
+
+def test_when_interpolates_past_moment():
+    """«Заменил на 101 000», сказанное на 102 000, — это было между замерами."""
+    readings = [reading(40, 100_000), reading(20, 102_000), reading(0, 104_000)]
+    moment = mileage.when(readings, 101_000)
+    assert moment is not None
+    assert abs((moment - days_ago(30)).total_seconds()) < 3600
+    assert mileage.when(readings, 99_000) is None

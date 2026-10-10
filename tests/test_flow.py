@@ -211,7 +211,7 @@ def _fill(odometer, liters, amount, day):
         chat_id=CHAT, author_id=ANTON, author_name="Антон", message_id=day,
         amount=Decimal(amount), category=Category.FUEL, note="",
         spent_at=datetime(2026, 7, day, tzinfo=timezone.utc),
-        liters=Decimal(liters), odometer=odometer,
+        liters=Decimal(liters) if liters else None, odometer=odometer,
     )
 
 
@@ -228,6 +228,21 @@ def test_fuel_stats_counts_fills_without_odometer():
     # 30 + 50 литров на 1000 км. Старый метод видел только последние 50 — 5 л/100
     assert stats.liters_per_100 == Decimal("8.0")
     assert stats.rub_per_km == Decimal("8.00")
+
+
+def test_fuel_stats_restores_liters_from_amount():
+    """«Бенз 5994» без литров — тоже бензин в баке, литры по своей цене."""
+    stats = fuel_stats(
+        [
+            _fill(100000, 40, 4000, 1),  # 100 ₽ за литр
+            _fill(None, None, 6000, 4),  # записано одной суммой — это 60 л
+            _fill(101000, 40, 4000, 9),
+        ]
+    )
+    assert stats is not None
+    assert stats.estimated_liters == Decimal("60.0")
+    # 60 восстановленных + 40 литров на 1000 км. Без восстановления было бы 4
+    assert stats.liters_per_100 == Decimal("10.0")
 
 
 def test_fuel_stats_drops_odometer_typos():
