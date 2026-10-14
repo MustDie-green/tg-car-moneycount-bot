@@ -372,3 +372,26 @@ async def test_bare_odometer_message_is_recorded(harness):
     assert [km for _, km in readings] == [123_456]
     # Вопроса «На тачку?» быть не должно — суммы в сообщении нет
     assert not [call for call in bot.of(SendMessage) if "На тачку" in (call.text or "")]
+
+
+async def test_bare_odometer_must_continue_mileage(harness):
+    """Голый замер ниже текущего пробега — опечатка или поездка, молча не пишем."""
+    feed, bot, ctx = harness
+    await seed(ctx.repo)
+    car = await ctx.repo.active_car(GROUP, ANTON)
+    await ctx.repo.add_odometer(
+        chat_id=GROUP, owner_id=ANTON, km=189_000,
+        at=datetime.now(timezone.utc) - timedelta(days=3), car=car,
+    )
+
+    def group_text(text, message_id):
+        return Message(
+            message_id=message_id, date=datetime.now(timezone.utc),
+            chat=Chat(id=GROUP, type="supergroup"),
+            from_user=User(id=ANTON, is_bot=False, first_name="Антон"), text=text,
+        )
+
+    await feed({"message": group_text("пробег 1250", 30)})
+    await feed({"message": group_text("пробег 189400", 31)})
+    readings = [km for _, km in await ctx.repo.odometer_readings(GROUP, ANTON)]
+    assert readings == [189_000, 189_400]

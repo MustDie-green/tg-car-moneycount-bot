@@ -96,6 +96,13 @@ def collect(readings: list[Reading]) -> list[Reading]:
     return chain
 
 
+def continues(previous: Reading, current: Reading) -> bool:
+    """Продолжает ли новый замер пробег машины: не меньше и не скачком."""
+    if current.km == previous.km:
+        return True
+    return _plausible(previous, current)
+
+
 def _plausible(previous: Reading, current: Reading) -> bool:
     gained = current.km - previous.km
     if gained <= 0:

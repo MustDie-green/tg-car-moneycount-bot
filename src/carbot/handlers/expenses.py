@@ -24,6 +24,7 @@ from ..formatting import money
 from ..models import CATEGORY_EMOJI, CATEGORY_TITLE, Category, Detection, ParseResult
 from ..parsing import parse_message
 from ..parsing.amount import extract_odometer
+from .. import mileage
 from ..services import Context
 from . import service_flow
 
@@ -173,6 +174,15 @@ async def _maybe_odometer(message: Message, ctx: Context, text: str) -> None:
     """Записывает замер пробега из сообщения без суммы и молча помечает галочкой."""
     km = extract_odometer(text)
     if km is None:
+        return
+    # Голый замер пишется молча, поэтому проверяем его строже, чем замер
+    # внутри траты: он должен продолжать пробег машины, а не падать на 1250
+    raw = await ctx.repo.odometer_readings(message.chat.id, message.from_user.id)
+    chain = mileage.collect([mileage.Reading(at=at, km=value) for at, value in raw])
+    if chain and not mileage.continues(chain[-1], mileage.Reading(at=message.date, km=km)):
+        log.info(
+            "замер %s км не продолжает пробег %s км — не записываю", km, chain[-1].km
+        )
         return
 
     await ctx.repo.upsert_person(

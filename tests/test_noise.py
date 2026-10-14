@@ -96,6 +96,8 @@ CHATTER = [
     "тут последний номер за 23к с сауной",
     # Капс — это крик, а не аббревиатура ТО
     "ТО ЕСТЬ 2К ЗА ЭТО",
+    # Цитата вопроса самого бота — с прода, 11 октября
+    "На тачку? 🔧 1920 ₽",
 ]
 
 
@@ -124,3 +126,13 @@ def test_rejected_messages_keep_the_amount_for_the_journal():
     """Иначе потом не понять, на каком числе бот перестраховался."""
     assert parse_message("телефон за 90к взял").seen_amounts == ["90000"]
     assert parse_message("хочу новую резину за 60к").seen_amounts == ["60000"]
+
+
+def test_trip_distance_is_not_odometer():
+    """«Проехал 1250 км» — расстояние поездки. С прода: 1200 и 1250 км."""
+    from carbot.parsing.amount import extract_odometer
+
+    assert extract_odometer("проехал 1250 км") is None
+    assert extract_odometer("до дачи 1200 км") is None
+    assert extract_odometer("пробег 74870") == 74870
+    assert extract_odometer("74870 км") == 74870
