@@ -97,24 +97,6 @@ async def offer_in_place(
     return True
 
 
-async def offer_as_reply(
-    ctx: Context,
-    message: Message,
-    *,
-    text: str,
-    odometer: int | None,
-) -> None:
-    """Для явной формы «на тачку …»: вопроса не было, задаём отдельным ответом."""
-    ask = await _draft(
-        ctx, message.chat.id, message.from_user.id, text, odometer, message.date
-    )
-    if ask is None:
-        return
-    body, keyboard = render(ask)
-    sent = await message.reply(body, reply_markup=keyboard)
-    await _store(ctx, message.chat.id, sent.message_id, ask)
-
-
 async def offer_in_dm(
     ctx: Context,
     *,

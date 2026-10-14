@@ -355,27 +355,55 @@ async def test_no_reminder_when_change_is_far_away(harness):
 # --- Замеры пробега из чата ---------------------------------------------------
 
 
-async def test_bare_odometer_message_is_recorded(harness):
+def group_text(text: str, message_id: int) -> Message:
+    return Message(
+        message_id=message_id, date=datetime.now(timezone.utc),
+        chat=Chat(id=GROUP, type="supergroup"),
+        from_user=User(id=ANTON, is_bot=False, first_name="Антон"), text=text,
+    )
+
+
+def group_tap(data: str, user_id: int = ANTON) -> CallbackQuery:
+    return CallbackQuery(
+        id="cb", from_user=User(id=user_id, is_bot=False, first_name="Антон"),
+        chat_instance="ci", data=data,
+        message=Message(
+            message_id=901, date=datetime.now(timezone.utc),
+            chat=Chat(id=GROUP, type="supergroup"),
+            from_user=User(id=1, is_bot=True, first_name="bot"), text="вопрос",
+        ),
+    )
+
+
+async def test_bare_odometer_asks_before_recording(harness):
+    """Голый пробег больше не пишется молча — сначала вопрос."""
     feed, bot, ctx = harness
     await seed(ctx.repo)
+    await feed({"message": group_text("пробег 123456", 20)})
 
-    group_message = Message(
-        message_id=20,
-        date=datetime.now(timezone.utc),
-        chat=Chat(id=GROUP, type="supergroup"),
-        from_user=User(id=ANTON, is_bot=False, first_name="Антон"),
-        text="пробег 123456",
-    )
-    await feed({"message": group_message})
+    assert await ctx.repo.odometer_readings(GROUP, ANTON) == []
+    assert "Записать пробег 123 456 км · RAV4?" in bot.last_text
+    assert "На тачку" not in bot.last_text
 
-    readings = await ctx.repo.odometer_readings(GROUP, ANTON)
-    assert [km for _, km in readings] == [123_456]
-    # Вопроса «На тачку?» быть не должно — суммы в сообщении нет
-    assert not [call for call in bot.of(SendMessage) if "На тачку" in (call.text or "")]
+    # Чужой палец не считается
+    await feed({"callback_query": group_tap("e:20:yes", user_id=999)})
+    assert await ctx.repo.odometer_readings(GROUP, ANTON) == []
+
+    await feed({"callback_query": group_tap("e:20:yes")})
+    assert [km for _, km in await ctx.repo.odometer_readings(GROUP, ANTON)] == [123_456]
 
 
-async def test_bare_odometer_must_continue_mileage(harness):
-    """Голый замер ниже текущего пробега — опечатка или поездка, молча не пишем."""
+async def test_bare_odometer_refused(harness):
+    feed, bot, ctx = harness
+    await seed(ctx.repo)
+    await feed({"message": group_text("пробег 123456", 21)})
+    await feed({"callback_query": group_tap("e:21:no")})
+    assert await ctx.repo.odometer_readings(GROUP, ANTON) == []
+    assert await ctx.repo.get_pending(GROUP, 21) is None
+
+
+async def test_implausible_odometer_is_not_even_asked(harness):
+    """Ниже текущего пробега — это поездка или опечатка: даже не спрашиваем."""
     feed, bot, ctx = harness
     await seed(ctx.repo)
     car = await ctx.repo.active_car(GROUP, ANTON)
@@ -383,15 +411,8 @@ async def test_bare_odometer_must_continue_mileage(harness):
         chat_id=GROUP, owner_id=ANTON, km=189_000,
         at=datetime.now(timezone.utc) - timedelta(days=3), car=car,
     )
-
-    def group_text(text, message_id):
-        return Message(
-            message_id=message_id, date=datetime.now(timezone.utc),
-            chat=Chat(id=GROUP, type="supergroup"),
-            from_user=User(id=ANTON, is_bot=False, first_name="Антон"), text=text,
-        )
-
+    bot.calls.clear()
     await feed({"message": group_text("пробег 1250", 30)})
+    assert not bot.of(SendMessage)
     await feed({"message": group_text("пробег 189400", 31)})
-    readings = [km for _, km in await ctx.repo.odometer_readings(GROUP, ANTON)]
-    assert readings == [189_000, 189_400]
+    assert "Записать пробег 189 400 км" in bot.last_text

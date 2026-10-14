@@ -264,11 +264,14 @@ class Repo:
         unknown_lemmas: list[str],
         spent_at: datetime,
         ttl_seconds: int,
+        odometer: int | None = None,
     ) -> None:
         payload = json.dumps(
             {
                 "detections": [_detection_to_json(d) for d in detections],
                 "unknown_lemmas": unknown_lemmas,
+                # Голый замер пробега, ждущий подтверждения
+                "odometer": odometer,
             },
             ensure_ascii=False,
         )

@@ -196,15 +196,18 @@ async def test_explicit_form_only_asks_for_the_category(harness):
     assert await ctx.learned(CHAT) == {"гидрач": Category.SERVICE}
 
 
-async def test_explicit_form_with_known_word_saves_instantly(harness):
-    """«на тачку 700 мойка» — категория ясна, вопрос не нужен вовсе."""
+async def test_explicit_form_asks_before_saving(harness):
+    """«на тачку 700 мойка» — без молчаливой записи, но и без «На тачку?»."""
     feed, bot, ctx = harness
     await feed({"message": message("на тачку 700 мойка", message_id=35)})
 
+    assert await ctx.repo.expenses_by_message(CHAT, 35) == []
+    question = bot.of(SendMessage)[-1].text
+    assert question.startswith("Записать?") and "На тачку" not in question
+
+    await feed({"callback_query": press("e:35:yes")})
     saved = await ctx.repo.expenses_by_message(CHAT, 35)
     assert saved and saved[0].amount == Decimal(700)
-    assert not bot.of(SendMessage), "никаких вопросов быть не должно"
-    assert [c.reaction[0].emoji for c in bot.of(SetMessageReaction)] == ["🫡"]
 
 
 async def test_ordinary_number_no_longer_asks(harness):

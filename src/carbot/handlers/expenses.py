@@ -84,13 +84,8 @@ async def on_message(message: Message, ctx: Context) -> None:
     if await ctx.repo.expenses_by_message(message.chat.id, message.message_id):
         return
 
-    # «на тачку 3000 гидрач» — человек уже сказал, что это про машину.
-    # Переспрашивать «На тачку?» тут глупо, сразу пишем.
-    if result.explicit and not any(d.needs_category for d in result.detections):
-        await _save_now(message, ctx, result)
-        await _journal(message, ctx, text, result, asked=False)
-        return
-
+    # Явная форма «на тачку …» тоже переспрашивает: молча бот ничего не пишет,
+    # иначе ложное срабатывание видно только по реакции, и то не всем
     question, keyboard = build_question(result, message.message_id, ctx.settings.currency)
     sent = await message.reply(question, reply_markup=keyboard)
     await _journal(message, ctx, text, result, asked=True)
@@ -135,76 +130,87 @@ async def _journal(
         log.debug("не смог записать наблюдение детектора", exc_info=True)
 
 
-async def _save_now(message: Message, ctx: Context, result: ParseResult) -> None:
-    """Явная форма: пишем сразу, без вопроса, и вешаем реакцию."""
-    await ctx.repo.touch_chat(message.chat.id, message.chat.title or "")
-    await ctx.repo.save_expenses(
-        chat_id=message.chat.id,
-        author_id=message.from_user.id,
-        author_name=display_name(message.from_user),
-        message_id=message.message_id,
-        detections=result.detections,
-        spent_at=message.date,
-        car=await ctx.repo.active_car(message.chat.id, message.from_user.id),
-    )
-    if result.unknown_lemmas:
-        category = result.detections[0].category
-        await ctx.repo.vote_words(
-            message.chat.id, result.unknown_lemmas, category, positive=True
-        )
-        ctx.forget_lexicon(message.chat.id)
-
-    total = sum((d.amount for d in result.detections), Decimal(0))
-    if not await _react(ctx, message.chat.id, message.message_id, total):
-        await message.reply(f"{SALUTE} {_summary(result.detections, ctx.settings.currency)}")
-    await service_flow.offer_as_reply(
-        ctx,
-        message,
-        text=" ".join(d.note for d in result.detections),
-        odometer=next((d.odometer for d in result.detections if d.odometer), None),
-    )
-    log.info(
-        "трата записана явной формой: чат=%s автор=%s %s",
-        message.chat.id, message.from_user.id,
-        _summary(result.detections, ctx.settings.currency),
-    )
-
-
 async def _maybe_odometer(message: Message, ctx: Context, text: str) -> None:
-    """Записывает замер пробега из сообщения без суммы и молча помечает галочкой."""
+    """Голый замер пробега — спрашиваем, прежде чем записать.
+
+    Явно неправдоподобный замер — ниже текущего пробега или скачком — не
+    стоит даже вопроса: это почти всегда «проехал 1250 км», а не одометр.
+    """
     km = extract_odometer(text)
     if km is None:
         return
-    # Голый замер пишется молча, поэтому проверяем его строже, чем замер
-    # внутри траты: он должен продолжать пробег машины, а не падать на 1250
+    if await ctx.repo.has_pending(message.chat.id, message.message_id):
+        return
     raw = await ctx.repo.odometer_readings(message.chat.id, message.from_user.id)
     chain = mileage.collect([mileage.Reading(at=at, km=value) for at, value in raw])
     if chain and not mileage.continues(chain[-1], mileage.Reading(at=message.date, km=km)):
         log.info(
-            "замер %s км не продолжает пробег %s км — не записываю", km, chain[-1].km
+            "замер %s км не продолжает пробег %s км — не спрашиваю", km, chain[-1].km
         )
         return
+
+    car = await ctx.repo.active_car(message.chat.id, message.from_user.id)
+    car_title = ""
+    if car is not None:
+        rows = await ctx.repo.cars(message.chat.id, message.from_user.id)
+        car_title = next((f" · {r['title']}" for r in rows if r["id"] == car), "")
+    question = f"Записать пробег {km:,} км{car_title}?".replace(",", " ")
+    keyboard = InlineKeyboardMarkup(
+        inline_keyboard=[[
+            _button("✅ Да", message.message_id, ACTION_YES),
+            _button("✖️ Нет", message.message_id, ACTION_NO),
+        ]]
+    )
+    sent = await message.reply(question, reply_markup=keyboard)
 
     await ctx.repo.upsert_person(
         message.chat.id, message.from_user.id, display_name(message.from_user)
     )
-    car = await ctx.repo.active_car(message.chat.id, message.from_user.id)
-    await ctx.repo.add_odometer(
-        chat_id=message.chat.id,
-        owner_id=message.from_user.id,
-        km=km,
-        at=message.date,
-        car=car,
-    )
     await ctx.repo.touch_chat(message.chat.id, message.chat.title or "")
+    await ctx.repo.save_pending(
+        chat_id=message.chat.id,
+        message_id=message.message_id,
+        question_id=sent.message_id,
+        author_id=message.from_user.id,
+        author_name=display_name(message.from_user),
+        username=message.from_user.username,
+        detections=[],
+        unknown_lemmas=[],
+        spent_at=message.date,
+        ttl_seconds=ctx.settings.pending_ttl,
+        odometer=km,
+    )
+
+
+async def _answer_odometer(
+    callback: CallbackQuery, ctx: Context, pending: dict, action: str
+) -> None:
+    chat_id, message_id = pending["chat_id"], pending["message_id"]
+    await ctx.repo.drop_pending(chat_id, message_id)
+    if action != ACTION_YES:
+        await _delete(ctx, chat_id, pending["question_id"])
+        await callback.answer("Ок, не пишу")
+        return
+
+    km = pending["payload"]["odometer"]
+    await ctx.repo.add_odometer(
+        chat_id=chat_id,
+        owner_id=pending["author_id"],
+        km=km,
+        at=pending["spent_at"],
+        car=await ctx.repo.active_car(chat_id, pending["author_id"]),
+    )
+    summary = f"{WRITTEN} пробег {km:,} км".replace(",", " ")
     try:
         await ctx.bot.set_message_reaction(
-            message.chat.id,
-            message.message_id,
-            reaction=[ReactionTypeEmoji(emoji=WRITTEN)],
+            chat_id, message_id, reaction=[ReactionTypeEmoji(emoji=WRITTEN)]
         )
+        await _delete(ctx, chat_id, pending["question_id"])
     except Exception:
-        log.debug("не смог поставить реакцию на замер пробега", exc_info=True)
+        # Без права на реакции подтверждение должно быть хоть как-то видно
+        await _replace_question(ctx, chat_id, pending["question_id"], summary)
+    await callback.answer(f"Записал {summary}")
+    log.info("пробег записан: чат=%s автор=%s %s км", chat_id, pending["author_id"], km)
 
 
 def display_name(user) -> str:
@@ -239,7 +245,8 @@ def build_question(
     body = " + ".join(parts)
     if len(parts) > 1:
         body += f" = {money(result.total, currency)}"
-    text = f"На тачку? {body}"
+    # «на тачку …» человек уже сказал сам — переспрашиваем только «записать?»
+    text = f"{'Записать?' if result.explicit else 'На тачку?'} {body}"
     rows = [
         [
             _button("✅ Да", message_id, ACTION_YES),
@@ -281,6 +288,9 @@ async def on_answer(callback: CallbackQuery, ctx: Context) -> None:
         return
 
     payload = pending["payload"]
+    if payload.get("odometer") and not payload["detections"]:
+        await _answer_odometer(callback, ctx, pending, action)
+        return
     detections = [detection_from_json(item) for item in payload["detections"]]
     unknown = payload.get("unknown_lemmas", [])
 
