@@ -189,6 +189,20 @@ def test_window_start_fill_is_not_counted():
     assert result.total == Decimal("1.00")
 
 
+def test_per_km_skips_tuning():
+    """Тюнинг — апгрейд, а не стоимость езды: в цену километра не идёт."""
+    readings = [reading(60, 100_000), reading(30, 101_000), reading(0, 102_000)]
+    expenses = [
+        expense(10, 2_000, Category.FUEL),
+        expense(5, 183_000, Category.TUNING, note="вебасто"),
+    ]
+    result = cost.per_km(readings, expenses)
+    assert result is not None
+    assert result.total == Decimal("1.00")
+    assert Category.TUNING not in result.by_category
+    assert result.expense_count == 1
+
+
 def test_per_km_without_readings():
     assert cost.per_km([], [expense(1, 1000)]) is None
     assert cost.per_km([reading(1, 100)], [expense(1, 1000)]) is None

@@ -166,7 +166,7 @@ def _stats(
 def _mileage(
     body: list[str], report: PersonalReport, y: float, currency: str
 ) -> float:
-    """Пробег и цена километра по всем тратам — не только по бензину."""
+    """Пробег и цена километра по всем тратам, кроме тюнинга, — не только по бензину."""
     cards: list[tuple[str, str, str]] = []
 
     if report.odometer:
