@@ -123,7 +123,35 @@ class KeywordIndex:
                 return lemma
         return None
 
+    def tuning_trigger(self, analysis: Analysis) -> str | None:
+        """Слово тюнинга в тексте, если оно есть, — для приоритета над ремонтом."""
+        self._build()
+        for lemma in analysis.lemmas:
+            if self._lemmas.get(lemma) == Category.TUNING:
+                return lemma
+        for token in analysis.tokens:
+            for prefix, category in self._prefixes:
+                if category == Category.TUNING and token.startswith(prefix):
+                    return token
+        return None
+
     def match(
+        self, analysis: Analysis, learned: dict[str, Category] | None = None
+    ) -> KeywordHit | None:
+        """Категория траты, с одним исключением из правила «первое слово».
+
+        В тексте «установка вебасто и замена помпы» есть и ремонт, и тюнинг.
+        Тюнинг тогда главнее: это и есть дорогая часть, ради которой платили,
+        а ремонт попутный. Иначе апгрейды тонули в «Ремонте и ТО».
+        """
+        hit = self._first_match(analysis, learned)
+        if hit is not None and hit.category == Category.SERVICE:
+            trigger = self.tuning_trigger(analysis)
+            if trigger:
+                return KeywordHit(Category.TUNING, trigger, Confidence.HIGH)
+        return hit
+
+    def _first_match(
         self, analysis: Analysis, learned: dict[str, Category] | None = None
     ) -> KeywordHit | None:
         """Первое сработавшее правило и есть категория."""

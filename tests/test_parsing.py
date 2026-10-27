@@ -198,3 +198,19 @@ def test_fuel_data_attached_to_expense():
 def test_note_is_cleaned():
     result = parse_message("мойка 500")
     assert result.detections[0].note == "мойка"
+
+
+@pytest.mark.parametrize(
+    "text, category",
+    [
+        ("чиповка 25000", Category.TUNING),
+        ("stage 1 прошивка 30к", Category.TUNING),
+        ("шумка 40000", Category.TUNING),
+        ("тонировка 6000", Category.TUNING),
+        # Смешанная трата: тюнинг главнее попутного ремонта
+        ("установка вебасто и замена помпы 183000", Category.TUNING),
+        ("замена помпы 12000", Category.SERVICE),
+    ],
+)
+def test_tuning_category(text, category):
+    assert parse_message(text).detections[0].category == category

@@ -11,6 +11,7 @@ from enum import StrEnum
 class Category(StrEnum):
     FUEL = "fuel"
     SERVICE = "service"
+    TUNING = "tuning"
     FINES = "fines"
     CARE = "care"
     STATE = "state"
@@ -28,6 +29,7 @@ class Category(StrEnum):
 CATEGORY_TITLE: dict[Category, str] = {
     Category.FUEL: "Бензин",
     Category.SERVICE: "Ремонт и ТО",
+    Category.TUNING: "Тюнинг",
     Category.FINES: "Штрафы",
     Category.CARE: "Уход",
     Category.STATE: "Государство",
@@ -36,6 +38,7 @@ CATEGORY_TITLE: dict[Category, str] = {
 CATEGORY_EMOJI: dict[Category, str] = {
     Category.FUEL: "⛽",
     Category.SERVICE: "🔧",
+    Category.TUNING: "⚡",
     Category.FINES: "🚨",
     Category.CARE: "🧽",
     Category.STATE: "🏛",
@@ -44,6 +47,7 @@ CATEGORY_EMOJI: dict[Category, str] = {
 CATEGORY_SHORT: dict[Category, str] = {
     Category.FUEL: "бенз",
     Category.SERVICE: "ремонт",
+    Category.TUNING: "тюнинг",
     Category.FINES: "штраф",
     Category.CARE: "уход",
     Category.STATE: "гос",

@@ -27,6 +27,9 @@ _SERVICE = (
     "a6 6 0 0 1 7.94-7.94l-3.76 3.76z",
 )
 
+# Молния
+_TUNING = ("M13 2L3 14h9l-1 8 10-12h-9l1-8z",)
+
 # Предупреждающий треугольник
 _FINES = (
     "M10.29 3.86L1.82 18a2 2 0 0 0 1.71 3h16.94a2 2 0 0 0 1.71-3L13.71 3.86"
@@ -52,6 +55,7 @@ _STATE = (
 _PATHS: dict[Category, tuple[str, ...]] = {
     Category.FUEL: _FUEL,
     Category.SERVICE: _SERVICE,
+    Category.TUNING: _TUNING,
     Category.FINES: _FINES,
     Category.CARE: _CARE,
     Category.STATE: _STATE,

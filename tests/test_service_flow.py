@@ -318,3 +318,24 @@ async def test_split_other_migration_is_idempotent():
     rows = await db.query("SELECT category FROM expense")
     assert rows[0]["category"] == "fines"
     await db.close()
+
+
+async def test_split_tuning_runs_once():
+    from carbot.db.migrations import split_tuning
+
+    db = Database("mem://", "test", "test")
+    await db.connect()
+    for note in ("установка предпускового подогревателя", "замена помпы"):
+        await db.query(
+            "CREATE expense SET chat_id = 1, author = person:[1, 1], author_id = 1, "
+            "author_name = 'А', message_id = 1, amount = 500, category = 'service', "
+            "note = $note, spent_at = time::now()",
+            {"note": note},
+        )
+    assert await split_tuning(db) == 1
+    # Человек вернул трату в ремонт — повторный старт его решение не трогает
+    await db.query("UPDATE expense SET category = 'service'")
+    assert await split_tuning(db) == 0
+    rows = await db.query("SELECT category FROM expense WHERE category = 'tuning'")
+    assert rows == []
+    await db.close()

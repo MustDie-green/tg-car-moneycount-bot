@@ -184,7 +184,12 @@ async def build_month_report(
         person.liters_per_100 = fuel.liters_per_100 if fuel else None
 
     # Звания раздаются последними: им нужны и пробег, и расход
-    assign_titles(people, _black_swan(top_expenses, expenses))
+    swan = _black_swan(top_expenses, expenses)
+    assign_titles(
+        people,
+        swan,
+        swan_is_tuning=swan is not None and top_expenses[0].category == Category.TUNING,
+    )
 
     names_by_id = {p.tg_id: p.name for p in people}
     service_soon = [

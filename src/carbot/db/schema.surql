@@ -66,7 +66,7 @@ DEFINE FIELD IF NOT EXISTS amount ON expense TYPE decimal;
 -- ограничение в уже созданной базе иначе так и осталось бы прежним.
 -- 'other' оставлен, пока миграция не разнесла старые записи по новым.
 DEFINE FIELD OVERWRITE category ON expense TYPE string
-    ASSERT $value IN ['fuel', 'service', 'fines', 'care', 'state', 'other'];
+    ASSERT $value IN ['fuel', 'service', 'tuning', 'fines', 'care', 'state', 'other'];
 DEFINE FIELD IF NOT EXISTS note ON expense TYPE string DEFAULT '';
 DEFINE FIELD IF NOT EXISTS liters ON expense TYPE option<decimal>;
 DEFINE FIELD IF NOT EXISTS odometer ON expense TYPE option<int>;
@@ -143,3 +143,8 @@ DEFINE FIELD IF NOT EXISTS km_estimated ON service_ask TYPE bool DEFAULT false;
 DEFINE FIELD IF NOT EXISTS awaiting_km ON service_ask TYPE bool DEFAULT false;
 DEFINE FIELD IF NOT EXISTS at ON service_ask TYPE datetime;
 DEFINE FIELD IF NOT EXISTS expires_at ON service_ask TYPE datetime;
+
+-- Разовые миграции данных, которые нельзя гонять на каждом старте:
+-- после них человек может сам поправить категорию, и повтор её перетёр бы
+DEFINE TABLE IF NOT EXISTS meta SCHEMAFULL;
+DEFINE FIELD IF NOT EXISTS done_at ON meta TYPE datetime;

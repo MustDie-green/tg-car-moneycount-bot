@@ -52,5 +52,25 @@ async def split_other(db: Database) -> int:
     return moved
 
 
+async def split_tuning(db: Database) -> int:
+    """Тюнинг, записанный в «Ремонт и ТО» до появления своей категории.
+
+    Разовая: после неё человек может сам вернуть трату в ремонт, и повтор на
+    следующем старте перетёр бы его решение. Поэтому отметка — в meta.
+    """
+    if await db.query("SELECT * FROM meta:tuning_split"):
+        return 0
+    rows = await db.query("SELECT id, note FROM expense WHERE category = 'service'")
+    moved = 0
+    for row in rows or []:
+        if index.tuning_trigger(analyze(row.get("note") or "")):
+            await db.query("UPDATE $id SET category = 'tuning'", {"id": row["id"]})
+            moved += 1
+    await db.query("UPSERT meta:tuning_split SET done_at = time::now()")
+    log.info("миграция тюнинга: из ремонта перенесено трат %s", moved)
+    return moved
+
+
 async def run_all(db: Database) -> None:
     await split_other(db)
+    await split_tuning(db)

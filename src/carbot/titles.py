@@ -24,6 +24,7 @@ MAX_STRENGTH = 5.0
 CATEGORY_TITLES: dict[Category, str] = {
     Category.FUEL: "Бензоколонка",
     Category.SERVICE: "Кузнец",
+    Category.TUNING: "Ксзибит",
     Category.FINES: "Любимец камер",
     Category.CARE: "Мойдодыр",
     Category.STATE: "Меценат дорожного фонда",
@@ -32,15 +33,22 @@ CATEGORY_TITLES: dict[Category, str] = {
 Candidate = tuple[float, int, str]
 
 
-def assign_titles(people: list[PersonMonth], black_swan_id: int | None = None) -> None:
+def assign_titles(
+    people: list[PersonMonth],
+    black_swan_id: int | None = None,
+    *,
+    swan_is_tuning: bool = False,
+) -> None:
     """Проставляет .titles участникам. Изменяет объекты на месте."""
     if not people:
         return
 
     candidates: list[Candidate] = []
     if black_swan_id is not None:
-        # Одна трата, на голову выше всех остальных, — главное событие месяца
-        candidates.append((10.0, black_swan_id, "Чёрный лебедь"))
+        # Одна трата, на голову выше всех остальных, — главное событие месяца.
+        # Если это апгрейд, а не поломка, — это не лебедь, это прокачка тачки
+        title = "Ксзибит" if swan_is_tuning else "Чёрный лебедь"
+        candidates.append((10.0, black_swan_id, title))
 
     for category, title in CATEGORY_TITLES.items():
         _add(candidates, title, _top(
@@ -58,7 +66,14 @@ def assign_titles(people: list[PersonMonth], black_swan_id: int | None = None) -
     _add(candidates, "Ночной гонщик", _top(people, lambda p: p.night_count, floor=2))
 
     for person in people:
-        if all(person.by_category.get(c, ZERO) > 0 for c in Category):
+        tuning = person.by_category.get(Category.TUNING, ZERO)
+        rest = person.total - tuning
+        # Апгрейды дороже всего остального вместе взятого — машина-проект
+        if tuning >= 10_000 and tuning > rest:
+            strength = min(float(tuning / rest) if rest > 0 else SOLE_LEADER, MAX_STRENGTH)
+            candidates.append((strength, person.tg_id, "Форсаж"))
+        # Траты чуть ли не во всех категориях: тюнинг в норме бывает не у всех
+        if sum(person.by_category.get(c, ZERO) > 0 for c in Category) >= len(Category) - 1:
             candidates.append((2.5, person.tg_id, "Человек-оркестр"))
 
     climber = max(people, key=lambda p: p.rank_delta or 0)

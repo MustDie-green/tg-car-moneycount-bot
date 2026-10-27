@@ -75,3 +75,22 @@ def test_black_swan_beats_everything():
     swan = person(1, by_category={Category.SERVICE: D(60000), Category.FINES: D(9000)})
     assign_titles([swan, person(2, by_category={Category.FUEL: D(100)})], black_swan_id=1)
     assert swan.titles[0] == "Чёрный лебедь"
+
+
+def test_tuning_titles():
+    """Ксзибит — больше всех на тюнинг; Форсаж — тюнинг дороже всего остального."""
+    builder = person(1, by_category={Category.TUNING: D(183000), Category.FUEL: D(20000)})
+    other = person(2, by_category={Category.TUNING: D(5000), Category.FUEL: D(30000)})
+    assign_titles([builder, other])
+    assert "Ксзибит" in builder.titles
+    assert "Форсаж" in builder.titles
+    assert "Форсаж" not in other.titles
+
+
+def test_tuning_black_swan_becomes_xzibit():
+    """Самая выбивающаяся трата — апгрейд: это прокачка, а не беда."""
+    builder = person(1, by_category={Category.TUNING: D(183000), Category.SERVICE: D(61600)})
+    other = person(2, by_category={Category.FUEL: D(3000)})
+    assign_titles([builder, other], black_swan_id=1, swan_is_tuning=True)
+    assert builder.titles[0] == "Ксзибит"
+    assert "Чёрный лебедь" not in builder.titles
